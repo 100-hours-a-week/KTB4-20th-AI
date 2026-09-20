@@ -1,6 +1,6 @@
 from math import sqrt
 
-from app.trips.schema.schemas import E_Preference, Member_Survey
+from app.trips.schemas.schemas import E_Preference, Member_Survey
 
 # 카테고리별 문항 인덱스 매핑 (survey_result의 위치 기반 접근에 사용)
 CATEGORY_INDEX_MAP: dict[E_Preference, tuple[int, int]] = {

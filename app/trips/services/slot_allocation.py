@@ -1,5 +1,5 @@
 from datetime import date
-from app.trips.schema.schemas import E_Preference
+from app.trips.schemas.schemas import E_Preference
 
 def allocate_slots_by_category(start_date: str, end_date: str, preferences: dict[E_Preference, float]) -> dict[E_Preference, int]:
     # 시작일, 종료일로 여행 일수 계산

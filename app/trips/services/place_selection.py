@@ -1,4 +1,4 @@
-from app.trips.schema.schemas import E_Preference, Place
+from app.trips.schemas.schemas import E_Preference, Place
 
 ALPHA = 0.7
 BETA = 0.3
