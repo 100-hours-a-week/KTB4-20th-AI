@@ -1,5 +1,7 @@
 from enum import Enum
+
 from pydantic import BaseModel, Field
+
 
 # Enum
 class E_Breaker(str, Enum):

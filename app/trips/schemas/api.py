@@ -1,16 +1,15 @@
 from enum import Enum
-from typing import Generic, TypeVar
+
 from pydantic import BaseModel, Field
 from schemas import Location, Member_Survey, Place
 
-T = TypeVar("T")
 
 class E_Response_Status_Code(int, Enum):
     SUCCESS = 200
     INVALID_INPUT = 422
     SERVER_ERROR = 500
 
-class Response(BaseModel, Generic[T]):
+class Response[T](BaseModel):
     status_code: E_Response_Status_Code
     data: T
 

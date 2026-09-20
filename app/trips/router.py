@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends
 
 from app.core.auth import verify_internal_token
+from app.trips.schemas.api import (
+    E_Response_Status_Code,
+    Place_Selection_Request,
+    Place_Selection_Response_Data,
+    Response,
+)
+from app.trips.services.place_selection import select_places
 from app.trips.services.preference import calculate_group_preference
 from app.trips.services.slot_allocation import allocate_slots_by_category
-from app.trips.services.place_selection import select_places
-from app.trips.schemas.api import Response, E_Response_Status_Code, Place_Selection_Request, Place_Selection_Response_Data, Course_Recommendation_Request, Course_Recommendation_Response_Data, Precheck_Request, Precheck_Response_Data
 
 router = APIRouter(
     prefix="/trips",
