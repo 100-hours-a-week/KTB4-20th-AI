@@ -6,7 +6,7 @@ from schemas import Location, Member_Survey, Place
 T = TypeVar("T")
 
 class E_Response_Status_Code(int, Enum):
-    OK = 200
+    SUCCESS = 200
     INVALID_INPUT = 422
     SERVER_ERROR = 500
 
