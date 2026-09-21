@@ -1,0 +1,74 @@
+name: "♻️ 리팩터링"
+description: "외부 기능 변경 없이 코드 구조를 개선합니다."
+title: "[Refactor] "
+labels:
+  - "refactor"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        기존 기능의 동작을 유지하면서 코드 구조, 책임 분리,
+        가독성 또는 유지보수성을 개선하기 위한 이슈입니다.
+
+  - type: textarea
+    id: target
+    attributes:
+      label: "📌 리팩터링 대상"
+      description: "리팩터링하려는 코드 또는 구조를 작성해주세요."
+      placeholder: |
+        예) LLM 클라이언트의 호출·재시도 로직
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: "⚠️ 현재 문제"
+      description: "현재 구조에서 발생하는 문제를 작성해주세요."
+      placeholder: |
+        하나의 함수가 API 호출, 재시도, 응답 파싱까지 담당하여 책임이 과도함.
+    validations:
+      required: true
+
+  - type: textarea
+    id: direction
+    attributes:
+      label: "💡 개선 방향"
+      description: "어떤 방식으로 구조를 개선할 것인지 작성해주세요."
+      placeholder: |
+        재시도 로직을 별도 헬퍼 함수로 분리함.
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: "🔍 영향 범위"
+      description: "리팩터링으로 영향을 받을 수 있는 영역을 작성해주세요."
+      placeholder: |
+        - API 클라이언트 모듈
+        - 파이프라인 모듈
+        - 관련 테스트
+
+  - type: textarea
+    id: tasks
+    attributes:
+      label: "✅ 상세 작업"
+      placeholder: |
+        - [ ] 재시도 헬퍼 함수 분리
+        - [ ] 기존 함수에서 호출부만 남기기
+        - [ ] 기존 테스트 확인
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: "🎯 완료 조건"
+      description: "리팩터링 완료 여부를 판단할 기준을 작성해주세요."
+      placeholder: |
+        - 기존 API 동작이 변경되지 않음
+        - 기존 테스트가 모두 통과함
+        - 재시도 로직이 별도 함수로 분리됨
+    validations:
+      required: true

@@ -1,0 +1,79 @@
+name: "🔎 기술 조사"
+description: "기술 또는 아키텍처 도입 여부를 조사하고 결정합니다."
+title: "[Research] "
+labels:
+  - "research"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        구현에 앞서 기술적 선택지를 조사하고,
+        의사결정 근거를 기록하기 위한 이슈입니다.
+
+  - type: textarea
+    id: background
+    attributes:
+      label: "📌 조사 배경"
+      description: "왜 해당 기술 또는 구조에 대한 조사가 필요한지 작성해주세요."
+      placeholder: |
+        특정 기능에 상용 LLM API 대신 로컬 모델 도입 여부를 판단해야 함.
+    validations:
+      required: true
+
+  - type: textarea
+    id: questions
+    attributes:
+      label: "❓ 확인할 내용"
+      description: "조사를 통해 확인해야 할 내용을 작성해주세요."
+      placeholder: |
+        - 현재 방식의 문제점은 무엇인가?
+        - 로컬 모델 도입 시 어떤 장점이 있는가?
+        - 운영 복잡도는 어느 정도 증가하는가?
+        - 현재 예상 트래픽에서 필요한가?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: "🔄 검토 대상 및 대안"
+      description: "비교할 기술이나 대안을 작성해주세요."
+      placeholder: |
+        - 상용 API 유지
+        - 오픈 가중치 모델 로컬 전환
+        - 다른 상용 API 대안
+
+  - type: textarea
+    id: result
+    attributes:
+      label: "📊 조사 결과"
+      description: "조사한 내용을 정리해주세요."
+      placeholder: |
+        조사 완료 후 내용을 추가해주세요.
+
+  - type: textarea
+    id: decision
+    attributes:
+      label: "✅ 최종 결정"
+      description: "어떤 방식을 선택했는지 작성해주세요."
+      placeholder: |
+        예) 현재 단계에서는 상용 API를 유지함.
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: "💡 결정 이유"
+      description: "최종 결정을 내린 근거를 작성해주세요."
+      placeholder: |
+        현재 예상 트래픽에서는 상용 API만으로 요구사항을 충족하며,
+        로컬 운영 비용이 얻는 이점보다 크다고 판단함.
+
+  - type: textarea
+    id: revisit
+    attributes:
+      label: "🔁 재검토 조건"
+      description: "추후 어떤 상황에서 이 결정을 다시 검토할지 작성해주세요."
+      placeholder: |
+        - 처리량이 일정 수준 이상 증가한 경우
+        - API 호출 비용이 운영 비용보다 커진 경우
+        - 응답 지연이 중요해진 경우
