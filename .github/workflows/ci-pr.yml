@@ -60,4 +60,3 @@ jobs:
           docker build \
             --platform linux/amd64 \
             -t planit-ai:ci .
-
