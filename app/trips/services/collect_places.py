@@ -1,9 +1,10 @@
-import time
 import math
+import time
+
 import requests
 
 from app.core.config import settings
-from app.trips.schemas.schemas import E_Preference, E_Google_Place_Type
+from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference
 
 BATCH_SIZE = 20  # Nearby Search 1회 최대 결과 수
 SLEEP_SECONDS = 0.5 # 레이트리밋 대기
@@ -196,8 +197,6 @@ def insert_place_type(place_row_id: int, type_value: str) -> None:
 # insert_place
 from datetime import datetime
 
-from app.trips.services.db import get_connection
-
 
 def insert_place(place_data: dict) -> int:
     now = datetime.now()
@@ -233,7 +232,6 @@ def insert_place(place_data: dict) -> int:
         conn.close()
 
 # place_exists
-from app.trips.services.db import get_connection
 
 def place_exists(google_place_id: str) -> bool:
     conn = get_connection()
