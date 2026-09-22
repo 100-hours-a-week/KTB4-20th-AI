@@ -1,0 +1,62 @@
+name: AI PR CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and Image Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check main PR source
+        if: >-
+          github.base_ref == 'main' &&
+          (github.head_ref != 'dev' ||
+           github.event.pull_request.head.repo.full_name != github.repository)
+        run: |
+          echo "::error::main에는 같은 저장소의 dev 브랜치에서 PR을 보내야 합니다."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: '0.12.16'
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --locked --python 3.12
+
+      - name: Lint
+        run: uv run --no-sync ruff check .
+
+      - name: Check Python syntax
+        run: uv run --no-sync python -m compileall -q app
+
+      # 실제 테스트가 작성되면 이미지 빌드 앞에 추가:
+      # - name: Test
+      #   run: uv run --no-sync pytest
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            -t planit-ai:ci .
