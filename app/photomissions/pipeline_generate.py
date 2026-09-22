@@ -1,6 +1,10 @@
 import asyncio
 import uuid
 
+import httpx
+from fastapi import HTTPException, status
+from google.genai import errors
+
 from app.photomissions.gemini_client import generate_structured
 from app.photomissions.prompts import MISSION_SYSTEM_PROMPT
 from app.photomissions.schemas import (
@@ -23,15 +27,33 @@ async def write_description(place: MissionPlace) -> MissionDescription:
     # description은 verify의 mission_description으로 재사용되므로, 사진만 보고 수행 여부를 판단할 수 있어야 한다.
     # scope 판정 기준(완료 규칙)은 MISSION_SYSTEM_PROMPT에 있다.
 
+    # TODO: Retry-After 값(30초)은 baseline 측정 후 확정
     user_prompt = (
         f"장소명: {place.displayName.text}\n"
         f"반영된 취향: {', '.join(place.matched_preferences) or '없음'}"
     )
-    return await generate_structured(
-        system=MISSION_SYSTEM_PROMPT,
-        user=user_prompt,
-        response_schema=MissionDescription,
-    )
+    try:
+        return await generate_structured(
+            system=MISSION_SYSTEM_PROMPT,
+            user=user_prompt,
+            response_schema=MissionDescription,
+        )
+    except errors.APIError as e:
+        if e.code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Gemini 호출 한도 초과",
+                headers={"Retry-After": "30"},
+            ) from e
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="미션 문구 생성 실패",
+        ) from e
+    except httpx.TimeoutException as e:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="미션 문구 생성 시간 초과",
+        ) from e
 
 
 def pick_primary_category(matched_preferences: list[T_Preference]) -> T_Preference | None:

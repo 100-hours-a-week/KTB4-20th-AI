@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException, status
-from google.genai import types
+from google.genai import errors, types
 from PIL import Image, ImageOps
 
 from app.core.config import settings
@@ -123,13 +123,31 @@ async def score_photo(
     image_bytes: bytes, place_name: str, mission_description: str
 ) -> VlmResult:
     # 6. 사진 판정 - 이미지+장소명+미션 내용을 VLM한테 주고 관찰→인식→판단→조언을 한 번에 받음
+    # TODO: Retry-After 값(30초)은 baseline 측정 후 확정
     user_prompt = f"목표 장소: {place_name}\n미션 내용: {mission_description}"
     image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
-    return await generate_structured(
-        system=VERIFY_SYSTEM_PROMPT,
-        user=[user_prompt, image_part],
-        response_schema=VlmResult,
-    )
+    try:
+        return await generate_structured(
+            system=VERIFY_SYSTEM_PROMPT,
+            user=[user_prompt, image_part],
+            response_schema=VlmResult,
+        )
+    except errors.APIError as e:
+        if e.code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Gemini 호출 한도 초과",
+                headers={"Retry-After": "30"},
+            ) from e
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="사진 판정 실패",
+        ) from e
+    except httpx.TimeoutException as e:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="사진 판정 시간 초과",
+        ) from e
 
 
 def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:

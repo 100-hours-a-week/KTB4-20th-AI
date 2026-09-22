@@ -5,7 +5,7 @@
 import functools
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -42,6 +42,11 @@ async def generate_structured(
             response = await _get_client().aio.models.generate_content(
                 model=MODEL_NAME, contents=contents, config=config,
             )
+        except errors.APIError as e:
+            if e.code == 429:  # 할당량 초과 - 바로 재시도해도 또 막히므로 즉시 포기
+                raise
+            last_error = e
+            continue
         except Exception as e:  # noqa: BLE001 — 재시도 대상이라 SDK 예외 종류를 가리지 않고 잡음
             last_error = e
             continue
