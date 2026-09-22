@@ -37,8 +37,8 @@ def convert_to_grid(lat: float, lon: float) -> tuple[int, int]:
         theta += 2.0 * math.pi
     theta *= sn
 
-    nx = int(math.floor(ra * math.sin(theta) + XO + 0.5))
-    ny = int(math.floor(ro - ra * math.cos(theta) + YO + 0.5))
+    nx = math.floor(ra * math.sin(theta) + XO + 0.5)
+    ny = math.floor(ro - ra * math.cos(theta) + YO + 0.5)
 
     return nx, ny
 

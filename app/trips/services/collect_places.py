@@ -195,11 +195,11 @@ def insert_place_type(place_row_id: int, type_value: str) -> None:
         conn.close()
 
 # insert_place
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 def insert_place(place_data: dict) -> int:
-    now = datetime.now()
+    now = datetime.now(UTC)
 
     conn = get_connection()
     try:
