@@ -23,10 +23,10 @@ router = APIRouter(
 def place_selection(request: Place_Selection_Request) -> Response[Place_Selection_Response_Data]:
     """
     TODO: v1에서는 하루 일정 생성만 가능하므로 현재 로직이 문제가 없습니다.
-    v2, v3에서는 시작일, 종료일이 기간이 생깁니다.
-    현재는 "슬롯 배분" 함수가 카테고리 별로 몇 개의 장소가 필요한지만 dict[E_Preference, float]로 알 수 있지만
+    v2, v3에서는 시작일, 종료일에 기간이 생깁니다.
+    현재는 "슬롯 배분" 함수가 카테고리 별로 몇 개의 장소가 필요한지 dict[E_Preference, float]로 알 수 있지만
     v2, v3에서 카테고리별 장소가 렌덤하게 배치되어도 무방한지, 만약 안된다면 어떻게 배치할지 논의가 선행되어야 합니다.
-    선행된 논의를 바탕으로 슬롯 배분이 일자별로 dict[E_Preference, float]를 가진 배열로 변경될 수도 있습니다.
+    선행된 논의를 바탕으로 슬롯 배분이 일자별로 dict[E_Preference, float]를 가진 "배열"로 변경될 수도 있기 때문입니다.
     """
 
     # 1. 취향 판정 로직
