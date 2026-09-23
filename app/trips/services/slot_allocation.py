@@ -3,26 +3,12 @@ from datetime import date
 from app.trips.schemas.schemas import E_Preference
 
 
-def allocate_slots_by_category(start_date: str, end_date: str, preferences: dict[E_Preference, float]) -> dict[E_Preference, int]:
-    # 시작일, 종료일로 여행 일수 계산
-    start = date.fromisoformat(start_date)
-    end = date.fromisoformat(end_date)
-    total_days = (end - start).days + 1
-    full_days = total_days - 1 # 마지막 날은 점심까지만
+def _distribute_by_preference_rank(
+    remaining: int, preferences: dict[E_Preference, float]
+) -> dict[E_Preference, int]:
+    """취향 순위(1위 많이, 순위 낮으면 적게)에 따라 remaining 슬롯을 배분. FOOD 제외."""
+    result: dict[E_Preference, int] = {c: 0 for c in E_Preference}
 
-    # 하루당 슬롯 수를 곱해 전체 슬롯 개수 계산("오전, 점심, 오후 1, 오후 2, 저녁", activity가 있을 경우 "저녁 이후 일정 1" 추가)
-    # activity가 있을 경우 "저녁 이후 일정 1개" 추가
-    # 있는지 여부 판단 기준: 평균 점수보다 activity가 높을 경우로 판단
-    avg_score = sum(preferences.values()) / len(preferences)
-    has_activity = preferences[E_Preference.ACTIVITY] >= avg_score
-    slots_per_full_day = 6 if has_activity else 5
-    total_slots = full_days * slots_per_full_day + 2
-
-    # FOOD는 항상 하루 최소 몇 개(점심, 저녁) 고정 배정
-    food_slots = full_days * 2 + 1
-    remaining = total_slots - food_slots
-
-    # 나머지 슬롯을 취향 점수 순위에 따라 배정(1위가 가장 많이, 순위가 낮을수록 적게)
     ranked = sorted(
         (c for c in preferences if c != E_Preference.FOOD),
         key=lambda c: preferences[c],
@@ -30,10 +16,6 @@ def allocate_slots_by_category(start_date: str, end_date: str, preferences: dict
     )
     weights = [len(ranked) - i for i in range(len(ranked))]
     total_weight = sum(weights)
-
-    # 카테고리별 배정 개수를 딕셔너리로 반환
-    result: dict[E_Preference, int] = {c: 0 for c in E_Preference}
-    result[E_Preference.FOOD] = food_slots
 
     allocated = 0
     for category, weight in zip(ranked, weights):
@@ -46,3 +28,45 @@ def allocate_slots_by_category(start_date: str, end_date: str, preferences: dict
         result[category] += 1
 
     return result
+
+
+def allocate_slots_by_category(
+    total_days: int, preferences: dict[E_Preference, float]
+) -> dict[E_Preference, int]:
+    full_days = total_days - 1
+
+    avg_score = sum(preferences.values()) / len(preferences)
+    has_activity = preferences[E_Preference.ACTIVITY] >= avg_score
+    slots_per_full_day = 6 if has_activity else 5
+    total_slots = full_days * slots_per_full_day + 2
+
+    food_slots = full_days * 2 + 1
+    remaining = total_slots - food_slots
+
+    result = _distribute_by_preference_rank(remaining, preferences)
+    result[E_Preference.FOOD] = food_slots
+    return result
+
+
+def allocate_slots_for_single_day(preferences: dict[E_Preference, float]) -> dict[E_Preference, int]:
+    avg_score = sum(preferences.values()) / len(preferences)
+    has_activity = preferences[E_Preference.ACTIVITY] >= avg_score
+    slots_per_day = 6 if has_activity else 5
+
+    remaining = slots_per_day - 2  # FOOD(점심+저녁) 제외한 나머지
+
+    result = _distribute_by_preference_rank(remaining, preferences)
+    result[E_Preference.FOOD] = 2
+    return result
+
+def allocate_slots(
+        start_date: str, end_date: str, preferences: dict[E_Preference, float]
+) -> dict[E_Preference, int]:
+    """여행 기간에 따라 하루 전용/다일 계산을 선택"""
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    total_days = (end - start).days + 1
+
+    if total_days == 1:
+        return allocate_slots_for_single_day(preferences)
+    return allocate_slots_by_category(total_days, preferences)
