@@ -1,4 +1,4 @@
-from app.trips.schemas.schemas import E_Preference, E_Breaker, Place
+from app.trips.schemas.schemas import E_Region, E_Preference, E_Breaker, Place
 
 ALPHA = 0.7
 BETA = 0.3
@@ -28,6 +28,14 @@ INVERTED_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
         "concert_hall", "opera_house",
         "church", "buddhist_temple", "hindu_temple", "mosque", "shinto_shrine", "synagogue",
     },
+}
+
+REGION_TO_COLLECTION_AREAS: dict[E_Region, list[str]] = {
+    E_Region.SEOUL: ["서울"],
+    E_Region.BUSAN: ["부산"],
+    E_Region.JEJU: ["제주시권", "서귀포권"],  # 하나의 선택지가 두 수집 지역에 대응
+    E_Region.GYEONGJU: ["경주"],
+    E_Region.JEONJU: ["전주"],
 }
 
 def get_DB_places_by_category(category: E_Preference, preference_score: float, limit: int) -> list[Place]:

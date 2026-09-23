@@ -4,6 +4,13 @@ from pydantic import BaseModel, Field
 
 
 # Enum
+class E_Region(str, Enum):
+    SEOUL = "서울"
+    BUSAN = "부산"
+    JEJU = "제주"
+    GYEONGJU = "경주"
+    JEONJU = "전주"
+
 class E_Breaker(str, Enum):
     """회피조건. 전부 '사용자가 절대 하고 싶지 않은 것'이라는 같은 성격.
     OUTDOOR_ACTIVITY만 회피 대상(야외)이 너무 많아, 여집합(실내)으로 구현
@@ -156,11 +163,6 @@ class Display_Name(BaseModel):
     languageCode: str
 
 
-class Location(BaseModel):
-    """위경도 좌표. Google Places 응답의 location(LatLng) 그대로."""
-    latitude: float
-    longitude: float
-
 # --- 도메인 모델 ---
 class User(BaseModel):
     user_id: str
@@ -171,7 +173,8 @@ class GooglePlaceData(BaseModel):
     Google Places API 우선, 그리고 DB Entity 차선"""
     id: str
     displayName: Display_Name
-    location: Location
+    latitude: float
+    longitude: float
     types: list[E_Google_Place_Type]
     rating: float
     userRatingCount: int
@@ -189,4 +192,3 @@ class Member_Survey(BaseModel):
     user: User
     survey_result: list[int] = Field(min_length=15, max_length=15)
     deal_breakers: list[E_Breaker] = Field(default_factory=list)
-    must_visit: list[Place] = Field(default_factory=list)

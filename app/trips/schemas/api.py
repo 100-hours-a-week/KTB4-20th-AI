@@ -1,7 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel, Field
-from schemas import Location, Member_Survey, Place
+from schemas import E_Region, Member_Survey, Place
 
 
 class E_Response_Status_Code(int, Enum):
@@ -15,7 +15,7 @@ class Response[T](BaseModel):
 
 # --- trips/place-selection ---
 class Place_Selection_Request(BaseModel):
-    location: Location
+    region: E_Region
     start_date: str
     end_date: str
     members: list[Member_Survey]
@@ -39,7 +39,7 @@ class Precheck_Reason(BaseModel):
     detail: str
 
 class Precheck_Request(BaseModel):
-    location: Location
+    region: E_Region
 
 
 class Precheck_Response_Data(BaseModel):
@@ -61,7 +61,7 @@ class Course(BaseModel):
     places: list[Place]
 
 class Course_Recommendation_Request(BaseModel):
-    location: Location
+    region: E_Region
     start_date: str
     end_date: str
     members: list[Member_Survey]
