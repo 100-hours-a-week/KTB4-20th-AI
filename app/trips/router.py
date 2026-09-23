@@ -8,10 +8,10 @@ from app.trips.schemas.api import (
     Response,
 )
 from app.trips.schemas.schemas import E_Breaker
+from app.trips.services.assign_time_slot import assign_time_slots
 from app.trips.services.place_selection import select_places
 from app.trips.services.preference import calculate_group_preference
 from app.trips.services.slot_allocation import allocate_slots
-from app.trips.services.assign_time_slot import assign_time_slots
 
 router = APIRouter(
     prefix="/trips",

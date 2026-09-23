@@ -1,5 +1,6 @@
 from app.trips.schemas.schemas import E_Preference, Place
 
+
 def assign_time_slots(places_by_category: dict[E_Preference, list[Place]]) -> list[Place]:
     # 1. 'FOOD'가 아닌 장소(비음식점)들을 순서대로 추가
     non_food_places = []

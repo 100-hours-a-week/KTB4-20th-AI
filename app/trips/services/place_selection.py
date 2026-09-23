@@ -1,5 +1,14 @@
+from app.trips.schemas.schemas import (
+    Display_Name,
+    E_Breaker,
+    E_Google_Place_Type,
+    E_Preference,
+    E_Region,
+    LocalizedText,
+    Location,
+    Place,
+)
 from app.trips.services.db import get_connection
-from app.trips.schemas.schemas import E_Region, E_Preference, E_Breaker, Place, E_Google_Place_Type, Display_Name, Location, LocalizedText
 
 # DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
 RATINGS_WEIGHT = 0.6

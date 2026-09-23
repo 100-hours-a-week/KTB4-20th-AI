@@ -1,7 +1,8 @@
 import time
+from typing import cast
 
 import requests
-from typing import cast
+
 from app.core.config import settings
 from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference
 
@@ -303,7 +304,7 @@ PROGRESS_FILE = Path(__file__).resolve().parent.parent / "data" / "collect_progr
 def load_completed() -> set[str]:
     try:
         with open(PROGRESS_FILE, encoding="utf-8") as f:
-            return set(line.strip() for line in f)
+            return {line.strip() for line in f}
     except FileNotFoundError:
         return set()
 

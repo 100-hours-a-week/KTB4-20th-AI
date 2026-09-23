@@ -165,7 +165,6 @@ class LocalizedText(BaseModel):
 
 class Display_Name(LocalizedText):
     """장소 표시 이름."""
-    pass
 
 
 class Location(BaseModel):
