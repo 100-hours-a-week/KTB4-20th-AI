@@ -157,11 +157,21 @@ class E_Preference(str, Enum):
 
 # --- 공통 값 객체 ---
 
-class Display_Name(BaseModel):
-    """장소 표시 이름. Google Places 응답의 displayName(LocalizedText) 그대로."""
+class LocalizedText(BaseModel):
+    """Google Places API의 LocalizedText 구조. displayName, editorialSummary 등에서 공통으로 쓰임."""
     text: str
     languageCode: str
 
+
+class Display_Name(LocalizedText):
+    """장소 표시 이름."""
+    pass
+
+
+class Location(BaseModel):
+    """위경도 좌표. Google Places 응답의 location(LatLng) 그대로."""
+    latitude: float
+    longitude: float
 
 # --- 도메인 모델 ---
 class User(BaseModel):
@@ -173,12 +183,11 @@ class GooglePlaceData(BaseModel):
     Google Places API 우선, 그리고 DB Entity 차선"""
     id: str
     displayName: Display_Name
-    latitude: float
-    longitude: float
+    location: Location
     types: list[E_Google_Place_Type]
     rating: float
     userRatingCount: int
-    editorialSummary: str | None = None
+    editorialSummary: LocalizedText | None = None
 
 
 class Place(GooglePlaceData):
