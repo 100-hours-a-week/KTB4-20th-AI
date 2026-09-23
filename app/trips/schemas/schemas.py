@@ -6,16 +6,18 @@ from pydantic import BaseModel, Field
 # Enum
 class E_Breaker(str, Enum):
     """회피조건. 전부 '사용자가 절대 하고 싶지 않은 것'이라는 같은 성격.
-    OUTDOOR_ACTIVITY만 회피 대상(야외)이 너무 많아,
-    여집합(실내)으로 구현(DIRECT/INVERTED_EXCLUDE_MAP에서 처리)."""
+    OUTDOOR_ACTIVITY만 회피 대상(야외)이 너무 많아, 여집합(실내)으로 구현
+    (DIRECT/INVERTED_EXCLUDE_MAP에서 처리)."""
     NOISY_PLACE = "시끄러운_곳"
     OUTDOOR_ACTIVITY = "야외_활동"
-    DRINKING = "술자리"
     SEAFOOD = "해산물"
+    RELIGIOUS_FACILITY = "종교시설"
+    ANIMAL_FACILITY = "동물시설"
+    HEIGHT_AVERSION = "고소공포"
 
 class E_Google_Place_Type(str, Enum):
     """Google Places type. 312개 전수 검토 중 확정 93개 반영."""
-    # HISTORY_CULTURE (29개)
+    # HISTORY_CULTURE (23개)
     MUSEUM = "museum"
     ART_GALLERY = "art_gallery"
     ART_MUSEUM = "art_museum"
@@ -39,14 +41,8 @@ class E_Google_Place_Type(str, Enum):
     MOSQUE = "mosque"
     SHINTO_SHRINE = "shinto_shrine"
     SYNAGOGUE = "synagogue"
-    MASSAGE = "massage"
-    MASSAGE_SPA = "massage_spa"
-    SAUNA = "sauna"
-    SPA = "spa"
-    WELLNESS_CENTER = "wellness_center"
-    YOGA_STUDIO = "yoga_studio"
 
-    # NATURE_HEALING (21개)
+    # NATURE_HEALING (18개)
     BEACH = "beach"
     ISLAND = "island"
     LAKE = "lake"
@@ -55,7 +51,6 @@ class E_Google_Place_Type(str, Enum):
     RIVER = "river"
     SCENIC_SPOT = "scenic_spot"
     WOODS = "woods"
-    AQUARIUM = "aquarium"
     BOTANICAL_GARDEN = "botanical_garden"
     CITY_PARK = "city_park"
     GARDEN = "garden"
@@ -65,14 +60,15 @@ class E_Google_Place_Type(str, Enum):
     PARK = "park"
     PICNIC_GROUND = "picnic_ground"
     STATE_PARK = "state_park"
-    WILDLIFE_PARK = "wildlife_park"
     WILDLIFE_REFUGE = "wildlife_refuge"
-    ZOO = "zoo"
 
-    # ACTIVITY (34개)
+    # ACTIVITY (37개)
     ADVENTURE_SPORTS_CENTER = "adventure_sports_center"
     AMUSEMENT_CENTER = "amusement_center"
     AMUSEMENT_PARK = "amusement_park"
+    AQUARIUM = "aquarium"
+    ZOO = "zoo"
+    WILDLIFE_PARK = "wildlife_park"
     BARBECUE_AREA = "barbecue_area"
     BOWLING_ALLEY = "bowling_alley"
     COMEDY_CLUB = "comedy_club"
@@ -105,7 +101,7 @@ class E_Google_Place_Type(str, Enum):
     SWIMMING_POOL = "swimming_pool"
     TENNIS_COURT = "tennis_court"
 
-    # CONVENIENCE_SHOPPING (9개)
+    # CONVENIENCE_SHOPPING (15개)
     CLOTHING_STORE = "clothing_store"
     COSMETICS_STORE = "cosmetics_store"
     DEPARTMENT_STORE = "department_store"
@@ -115,6 +111,12 @@ class E_Google_Place_Type(str, Enum):
     JEWELRY_STORE = "jewelry_store"
     MARKET = "market"
     SHOPPING_MALL = "shopping_mall"
+    MASSAGE = "massage"
+    MASSAGE_SPA = "massage_spa"
+    SAUNA = "sauna"
+    SPA = "spa"
+    WELLNESS_CENTER = "wellness_center"
+    YOGA_STUDIO = "yoga_studio"
 
     # FOOD(대표값 — 전체 159개는 별도 상수 목록 관리 예정)
     RESTAURANT = "restaurant"

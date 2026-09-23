@@ -1,7 +1,34 @@
-from app.trips.schemas.schemas import E_Preference, Place
+from app.trips.schemas.schemas import E_Preference, E_Breaker, Place
 
 ALPHA = 0.7
 BETA = 0.3
+
+DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
+    E_Breaker.SEAFOOD: {"seafood_restaurant"},
+    E_Breaker.NOISY_PLACE: {
+        "night_club", "amusement_park", "karaoke", "dance_hall",
+        "video_arcade", "comedy_club", "live_music_venue",
+        "amusement_center", "arena", "stadium", "water_park",
+    },
+    E_Breaker.RELIGIOUS_FACILITY: {
+        "church", "buddhist_temple", "hindu_temple",
+        "mosque", "shinto_shrine", "synagogue",
+    },
+    E_Breaker.ANIMAL_FACILITY: {
+        "aquarium", "zoo", "wildlife_park", "wildlife_refuge",
+    },
+    E_Breaker.HEIGHT_AVERSION: {
+        "observation_deck", "ferris_wheel", "roller_coaster",
+    },
+}
+
+INVERTED_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
+    E_Breaker.OUTDOOR_ACTIVITY: {
+        "museum", "art_gallery", "art_museum", "history_museum",
+        "concert_hall", "opera_house",
+        "church", "buddhist_temple", "hindu_temple", "mosque", "shinto_shrine", "synagogue",
+    },
+}
 
 def get_DB_places_by_category(category: E_Preference, preference_score: float, limit: int) -> list[Place]:
     # TODO: DB 쿼리로 직접 처리
