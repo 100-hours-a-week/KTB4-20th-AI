@@ -4,7 +4,7 @@ from app.trips.schemas.schemas import (
     E_Google_Place_Type,
     E_Preference,
     E_Region,
-    LocalizedText,
+    Editorial_Summary,
     Location,
     Place,
 )
@@ -131,7 +131,7 @@ def get_DB_places_by_category(
                 ],
                 rating=row[3],
                 userRatingCount=row[4],
-                editorialSummary=LocalizedText(text=row[5], languageCode="ko") if row[5] else None,
+                editorialSummary=Editorial_Summary(text=row[5], languageCode="ko") if row[5] else None,
             )
             for row in rows
         ]

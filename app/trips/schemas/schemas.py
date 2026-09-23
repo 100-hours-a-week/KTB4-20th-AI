@@ -13,8 +13,8 @@ class E_Region(str, Enum):
 
 class E_Breaker(str, Enum):
     """회피조건. 전부 '사용자가 절대 하고 싶지 않은 것'이라는 같은 성격.
-    OUTDOOR_ACTIVITY만 회피 대상(야외)이 너무 많아, 여집합(실내)으로 구현
-    (DIRECT/INVERTED_EXCLUDE_MAP에서 처리)."""
+    OUTDOOR_ACTIVITY만 회피 대상(야외)이 너무 많아,
+    여집합(실내)으로 구현(DIRECT/INVERTED_EXCLUDE_MAP에서 처리)."""
     NOISY_PLACE = "시끄러운_곳"
     OUTDOOR_ACTIVITY = "야외_활동"
     SEAFOOD = "해산물"
@@ -157,14 +157,14 @@ class E_Preference(str, Enum):
 
 # --- 공통 값 객체 ---
 
-class LocalizedText(BaseModel):
-    """Google Places API의 LocalizedText 구조. displayName, editorialSummary 등에서 공통으로 쓰임."""
+class Editorial_Summary(BaseModel):
+    """장소 요약 설명. Google Places API의 LocalizedText 구조"""
     text: str
     languageCode: str
 
 
-class Display_Name(LocalizedText):
-    """장소 표시 이름."""
+class Display_Name(Editorial_Summary):
+    """장소 표시 이름. Google Places API의 LocalizedText 구조"""
 
 
 class Location(BaseModel):
@@ -186,7 +186,7 @@ class GooglePlaceData(BaseModel):
     types: list[E_Google_Place_Type]
     rating: float
     userRatingCount: int
-    editorialSummary: LocalizedText | None = None
+    editorialSummary: Editorial_Summary | None = None
 
 
 class Place(GooglePlaceData):
