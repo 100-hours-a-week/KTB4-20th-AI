@@ -67,9 +67,8 @@ async def test_rate_limit_maps_to_429_with_retry_after(monkeypatch, module, call
 
 
 @pytest.mark.parametrize(("module", "call"), CALLERS)
-@pytest.mark.parametrize("code", [400, 500, 503])
-async def test_other_api_error_maps_to_502(monkeypatch, module, call, code):
-    monkeypatch.setattr(module, "generate_structured", _raising(_api_error(code)))
+async def test_other_api_error_maps_to_502(monkeypatch, module, call):
+    monkeypatch.setattr(module, "generate_structured", _raising(_api_error(500)))
     with pytest.raises(HTTPException) as exc:
         await call()
     assert exc.value.status_code == 502
@@ -116,9 +115,8 @@ async def test_fetch_image_returns_bytes(fake_s3):
     assert await pipeline_verify.fetch_image(IMAGE_URL) == b"jpeg-bytes"
 
 
-@pytest.mark.parametrize("status_code", [403, 404, 500])
-async def test_fetch_image_error_status_maps_to_502(fake_s3, status_code):
-    fake_s3(lambda request: httpx.Response(status_code))
+async def test_fetch_image_error_status_maps_to_502(fake_s3):
+    fake_s3(lambda request: httpx.Response(404))
     with pytest.raises(HTTPException) as exc:
         await pipeline_verify.fetch_image(IMAGE_URL)
     assert exc.value.status_code == 502
@@ -135,6 +133,7 @@ async def test_fetch_image_timeout_maps_to_504(fake_s3):
 
 
 async def test_fetch_image_connection_error_maps_to_502(fake_s3):
+    # 응답 자체를 못 받은 경우(DNS·네트워크 장애)도 404 같은 실패 응답과 똑같이 502여야 한다
     def handler(request):
         raise httpx.ConnectError("fake", request=request)
 

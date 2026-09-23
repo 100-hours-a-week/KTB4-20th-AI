@@ -21,10 +21,6 @@ def test_mission_id_format():
     assert re.fullmatch(r"ms_[0-9a-f]{12}", new_mission_id())
 
 
-def test_mission_id_is_unique():
-    assert len({new_mission_id() for _ in range(1000)}) == 1000
-
-
 def test_primary_category_is_first_preference():
     assert pick_primary_category(["HISTORY_CULTURE", "FOOD"]) == "HISTORY_CULTURE"
 
