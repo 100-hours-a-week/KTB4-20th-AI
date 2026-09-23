@@ -1,36 +1,32 @@
-import math
 import time
 
 import requests
-
+from typing import cast
 from app.core.config import settings
 from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference
 
 BATCH_SIZE = 20  # Nearby Search 1회 최대 결과 수
 SLEEP_SECONDS = 0.5 # 레이트리밋 대기
-MAX_RETRIES = 3
+MAX_RETRIES = 3 # 호출 자체가 실패했을 경우, 최대 3회까지 재호출
 
 REGIONS = {
-    "서울": {"center": (37.5665, 126.9780), "radius_m": 18000},
-    "경주": {"center": (35.8367, 129.2110), "radius_m": 13000},
+    "서울": {"center": (37.5665, 126.9780), "radius_km": 18},
+    "경주": {"center": (35.8367, 129.2110), "radius_km": 13},
+    "부산": {"center": (35.1796, 129.0756), "radius_km": 15},
+    "전주": {"center": (35.8181703, 127.1535972), "radius_km": 8},
+    "제주시권": {"center": (33.499461, 126.530167), "radius_km": 15},
+    "서귀포권": {"center": (33.2541, 126.5601), "radius_km": 15},
 }
 
-ALLOCATION = {
-    "서울": {
-        E_Preference.HISTORY_CULTURE: 100,
-        E_Preference.NATURE_HEALING: 100,
-        E_Preference.FOOD: 100,
-        E_Preference.ACTIVITY: 100,
-        E_Preference.CONVENIENCE_SHOPPING: 100,
-    },
-    "경주": {
-        E_Preference.HISTORY_CULTURE: 150,
-        E_Preference.NATURE_HEALING: 87,
-        E_Preference.FOOD: 88,
-        E_Preference.ACTIVITY: 88,
-        E_Preference.CONVENIENCE_SHOPPING: 87,
-    },
-}
+# 고정 반경 적용
+import json
+from pathlib import Path
+
+HEX_RADIUS_M = 2883  # 작은 원(육각형)의 반경
+
+_HEX_GRID_PATH = Path(__file__).resolve().parent.parent / "data" / "hex_grid_points.json"
+with open(_HEX_GRID_PATH, encoding="utf-8") as f:
+    HEX_GRID_POINTS: dict[str, list[list[float]]] = json.load(f)
 
 CATEGORY_TYPE_MAP: dict[E_Preference, list[E_Google_Place_Type]] = {
     E_Preference.HISTORY_CULTURE: [
@@ -302,25 +298,39 @@ def call_nearby_search_with_retry(
     print(f"{MAX_RETRIES}회 재시도 후에도 실패 — 이 배치는 건너뜀")
     return None
 
+PROGRESS_FILE = Path(__file__).resolve().parent.parent / "data" / "collect_progress.txt"
+
+def load_completed() -> set[str]:
+    try:
+        with open(PROGRESS_FILE, encoding="utf-8") as f:
+            return set(line.strip() for line in f)
+    except FileNotFoundError:
+        return set()
+
+def mark_completed(key: str) -> None:
+    with open(PROGRESS_FILE, 'a', encoding='utf-8') as f:
+        f.write(key + '\n')
+
 def collect_places() -> None:
-    # 1. REGIONS와 ALLOCATION을 이중 for문으로 순회한다 (region, category, count)
-    for region_name, region_info in REGIONS.items():
-        center = region_info["center"]
-        radius_m = region_info["radius_m"]
+    # 지금까지 완료한 것 호출, 전체 호출 횟수 초기화
+    completed = load_completed() # 지금까지 완료된 장소
+    total_calls = 0 # 전체 호출 횟수
+    consecutive_parse_failures = 0
+    MAX_CONSECUTIVE_FAILURES = 5  # 연속 5번 이상하면 진짜 문제로 판단
 
-        for category, count in ALLOCATION[region_name].items():
-            included_types = [t.value for t in CATEGORY_TYPE_MAP[category]]
+    # 1. 반복문 1: HEX_GRID_POINTS의 지역을 순회
+    for region_name, points in HEX_GRID_POINTS.items():
+        # 반복문 2: 지역의 세부 좌표 배열(points)를 순서대로 순회
+        for i, point in enumerate(points):
+            center = cast(tuple[float, float], tuple(point)) # 세부 좌표
 
-            num_batches = math.ceil(count / BATCH_SIZE)
-            collected = 0
+            # 반복문 3: 5개의 취향 카테고리 순회
+            for category in E_Preference:
+                key = f"{region_name}_{i}_{category.value}" # 이 조합의 고유 식별자
+                if key in completed:
+                    continue # 이미 끝난 조합이면 건너뜀 (API 호출 자체를 안 함)
 
-            # 2. count를 BATCH_SIZE(20)로 나눠 몇 번 호출해야 하는지 계산한다.
-            #    (예: 150개 필요하면 8번 호출: 20*7=140 + 마지막 10개)
-            for batch_idx in range(num_batches):
-                remaining = count - collected
-                this_batch_size = min(BATCH_SIZE, remaining)
-                if this_batch_size <= 0:
-                    break
+                included_types = [t.value for t in CATEGORY_TYPE_MAP[category]]
 
                 # 3. 반복마다 Nearby Search API를 호출한다.
                 #    - includedTypes: category에 대응하는 Google types 목록
@@ -330,35 +340,46 @@ def collect_places() -> None:
                 response = call_nearby_search_with_retry(
                     included_types=included_types,
                     center=center,
-                    radius_m=radius_m,
-                    max_result_count=this_batch_size,
+                    radius_m=HEX_RADIUS_M,
+                    max_result_count=BATCH_SIZE
                 )
+                total_calls += 1
                 time.sleep(SLEEP_SECONDS)
 
-                if response is None:
-                    continue  # 이 배치는 건너뛰고 다음 배치로
+                if response is not None:
+                    try:
+                        # 4. 응답으로 받은 장소들마다:
+                        #    - google_place_id가 이미 DB에 있는지 SELECT로 확인
+                        #    - 없으면 INSERT INTO places (Prepared Statement)
+                        #    - INSERT INTO place_categories (해당 category)
+                        #    - INSERT INTO place_types (응답의 types 배열 전부)
+                        for place_data in response.get("places", []):
+                            google_place_id = place_data["id"]
 
-                # 4. 응답으로 받은 장소들마다:
-                #    - google_place_id가 이미 DB에 있는지 SELECT로 확인
-                #    - 없으면 INSERT INTO places (Prepared Statement)
-                #    - INSERT INTO place_categories (해당 category)
-                #    - INSERT INTO place_types (응답의 types 배열 전부)
-                for place_data in response.get("places", []):
-                    google_place_id = place_data["id"]
+                            if place_exists(google_place_id):
+                                continue
 
-                    if place_exists(google_place_id):
-                        continue
+                            place_row_id = insert_place(place_data)
+                            insert_place_category(place_row_id, category.value)
 
-                    place_row_id = insert_place(place_data)
-                    insert_place_category(place_row_id, category.value)
+                            for type_value in place_data.get("types", []):
+                                insert_place_type(place_row_id, type_value)
+                    except (KeyError, AttributeError, TypeError) as e:
+                        consecutive_parse_failures += 1
+                        print(f"응답 구조 이상({key}): {e} — 이 조합은 건너뜀")
+                        print(f"연속 이상 횟수: {consecutive_parse_failures}/{MAX_CONSECUTIVE_FAILURES}")
 
-                    for type_value in place_data.get("types", []):
-                        insert_place_type(place_row_id, type_value)
+                        if consecutive_parse_failures >= MAX_CONSECUTIVE_FAILURES:
+                            print("연속으로 응답 구조 이상 발생 — API 스펙이 바뀌었을 가능성, 수집을 중단합니다.")
+                            print(f"마지막 응답 원본: {response}")
+                            return  # 진짜 여기서 전체 종료
 
-                    collected += 1
+                mark_completed(key) # 성공했든, None으로 실패했든 이 조합은 "시도 완료"를 기록
 
-            print(f"{region_name} - {category.value}: {collected}/{count} 수집 완료")
+        print(f"{region_name} 완료 (누적 호출: {total_calls}회)")
 
-    # 5. 전체 반복이 끝나면 SELECT COUNT(*) FROM places로 최종 개수 로그 출력
     total = count_places()
-    print(f"전체 수집 완료: {total}개")
+    print(f"전체 수집 완료: {total}개 (총 호출 {total_calls}회)")
+
+if __name__ == "__main__":
+    collect_places()
