@@ -1,7 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel, Field
-from schemas import E_Region, Member_Survey, Place
+from app.trips.schemas.schemas import E_Region, Member_Survey, Place
 
 
 class E_Response_Status_Code(int, Enum):
