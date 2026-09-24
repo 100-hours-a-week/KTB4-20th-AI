@@ -51,9 +51,8 @@ jobs:
       - name: Check Python syntax
         run: uv run --no-sync python -m compileall -q app
 
-      # 실제 테스트가 작성되면 이미지 빌드 앞에 추가:
-      # - name: Test
-      #   run: uv run --no-sync pytest
+      - name: Test
+        run: uv run --no-sync pytest
 
       - name: Build Docker image
         run: |
