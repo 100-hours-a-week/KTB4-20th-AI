@@ -6,8 +6,8 @@ from app.trips.schemas.schemas import (
     E_Region,
     Editorial_Summary,
     Location,
+    Member_Survey,
     Place,
-    Member_Survey
 )
 
 # TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
