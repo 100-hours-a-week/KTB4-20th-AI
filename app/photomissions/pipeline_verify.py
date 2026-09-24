@@ -112,7 +112,7 @@ def normalize_image(image_bytes: bytes) -> bytes:
     image = ImageOps.exif_transpose(image)  # EXIF 방향을 실제 픽셀에 반영 (세로사진이 눕는 것 방지)
     image = image.convert("RGB")  # PNG 투명배경 등도 JPEG로 통일
 
-    image.thumbnail((_MAX_DIMENSION, _MAX_DIMENSION), Image.LANCZOS)  # 비율 유지, 더 작으면 확대 안 함
+    image.thumbnail((_MAX_DIMENSION, _MAX_DIMENSION), Image.Resampling.LANCZOS)  # 비율 유지, 더 작으면 확대 안 함
 
     output = io.BytesIO()
     image.save(output, format="JPEG", quality=_JPEG_QUALITY)
