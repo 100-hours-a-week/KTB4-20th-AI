@@ -44,7 +44,7 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
     places_by_category = select_places(preferences, slot_counts, deal_breakers)
 
     # 5. 시간대 슬롯 배정
-    slot_result = assign_time_slots(places_by_category)
+    slot_result = assign_time_slots(places_by_category, preferences)
 
     return Response[Place_Selection_Response_Data](
         status_code=E_Response_Status_Code.SUCCESS,
