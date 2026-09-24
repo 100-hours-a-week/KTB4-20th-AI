@@ -41,7 +41,7 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
         deal_breakers.extend(member.deal_breakers)
 
     # 4. 최종 장소 선택 (카테고리별 딕셔너리 반환)
-    places_by_category = select_places(preferences, slot_counts, deal_breakers, request.region)
+    places_by_category = select_places(preferences, slot_counts, deal_breakers, request.region, request.members)
 
     # 5. 시간대 슬롯 배정
     slot_result = assign_time_slots(places_by_category, preferences)

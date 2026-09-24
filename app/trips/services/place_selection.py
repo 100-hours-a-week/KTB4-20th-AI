@@ -7,6 +7,7 @@ from app.trips.schemas.schemas import (
     Editorial_Summary,
     Location,
     Place,
+    Member_Survey
 )
 
 # TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
@@ -14,6 +15,7 @@ from app.trips.schemas.schemas import (
 # REGION_TO_COLLECTION_AREAS를 별도 constants.py로 분리 필요(배포 후 정리).
 from app.trips.services.collect_places import HEX_GRID_POINTS, HEX_RADIUS_M
 from app.trips.services.db import get_connection
+from app.trips.services.preference import find_matched_members
 
 # DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
 RATINGS_WEIGHT = 0.6
@@ -159,6 +161,7 @@ def select_places(
     slot_counts: dict[E_Preference, int],
     deal_breakers: list[E_Breaker],
     region: E_Region,
+    members: list[Member_Survey],
 ) -> dict[E_Preference, list[Place]]:
     direct_excluded: set[str] = set()
 
@@ -174,6 +177,15 @@ def select_places(
             category, preferences[category], count, region,
             excluded_types=direct_excluded,
         )
+
+        # 이 카테고리에서 그룹 평균보다 높은 멤버들 계산 (카테고리당 한 번만)
+        matched_members = find_matched_members(members, category)
+
+        # 각 장소에 matched_preferences, selected_for 채움
+        for place in db_places:
+            place.matched_preferences = [category]
+            place.selected_for = matched_members
+
         result[category] = db_places
 
     return result
