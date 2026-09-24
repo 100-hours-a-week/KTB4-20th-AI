@@ -19,9 +19,6 @@ from app.photomissions.schemas import (
     VlmResult,
 )
 
-_GPS_IFD_TAG = 0x8825  # EXIF 표준 태그 번호
-_GPS_LAT_REF, _GPS_LAT, _GPS_LON_REF, _GPS_LON = 1, 2, 3, 4  # GPS IFD 내부 태그 번호
-
 _EARTH_RADIUS_KM = 6371.0
 CLEAR_MISMATCH_KM = 5.0  # TODO: 2단계 평가셋으로 확정 전 임시값
 
@@ -44,7 +41,7 @@ def assert_allowed_source(image_url: str) -> None:
 
 
 async def fetch_image(image_url: str) -> bytes:
-    # 2. 이미지 획득 - presigned URL로 원본 사진을 가져온다
+    # 3. 이미지 획득 - presigned URL로 원본 사진을 가져온다
     # TODO: 타임아웃 값(httpx 기본 5초)은 2단계 baseline 측정 후 확정
     async with httpx.AsyncClient() as client:
         try:
@@ -63,32 +60,6 @@ async def fetch_image(image_url: str) -> bytes:
     return response.content
 
 
-def _dms_to_decimal(dms: tuple[float, float, float], ref: str) -> float:
-    # 도/분/초(degrees, minutes, seconds) 표기를 십진수 좌표로 변환
-    degrees, minutes, seconds = dms
-    decimal = degrees + minutes / 60 + seconds / 3600
-    return -decimal if ref in ("S", "W") else decimal
-
-
-def extract_gps(image_bytes: bytes) -> Coordinates | None:
-    # 3. EXIF에서 GPS 좌표를 추출한다. 없으면 None 
-    image = Image.open(io.BytesIO(image_bytes))
-    exif = image.getexif()
-    gps_ifd = exif.get_ifd(_GPS_IFD_TAG)
-
-    lat = gps_ifd.get(_GPS_LAT)
-    lat_ref = gps_ifd.get(_GPS_LAT_REF)
-    lon = gps_ifd.get(_GPS_LON)
-    lon_ref = gps_ifd.get(_GPS_LON_REF)
-    if not (lat and lat_ref and lon and lon_ref):
-        return None
-
-    return Coordinates(
-        latitude=_dms_to_decimal(lat, lat_ref),
-        longitude=_dms_to_decimal(lon, lon_ref),
-    )
-
-
 def _haversine_km(a: Coordinates, b: Coordinates) -> float:
     # 두 좌표 사이의 직선거리(km). 지구를 구로 근사하는 Haversine 공식.
     lat1, lon1 = math.radians(a.latitude), math.radians(a.longitude)
@@ -99,15 +70,13 @@ def _haversine_km(a: Coordinates, b: Coordinates) -> float:
     return 2 * _EARTH_RADIUS_KM * math.asin(math.sqrt(h))
 
 
-def is_clear_mismatch(exif_gps: Coordinates | None, place_coordinates: Coordinates) -> bool:
-    # 4. 위치 사전 판정 - GPS가 없으면 판정 불가이므로 통과시킨다(사진 자체는 VLM이 봄)
-    if exif_gps is None:
-        return False
-    return _haversine_km(exif_gps, place_coordinates) > CLEAR_MISMATCH_KM
+def is_clear_mismatch(photo_coordinates: Coordinates, place_coordinates: Coordinates) -> bool:
+    # 2. 위치 사전 판정 - 사진 좌표가 목표 장소에서 명백히 먼지만 본다
+    return _haversine_km(photo_coordinates, place_coordinates) > CLEAR_MISMATCH_KM
 
 
 def normalize_image(image_bytes: bytes) -> bytes:
-    # 5. 이미지 전처리 - 리사이즈·포맷 정규화로 입력 크기 축소 (prefill 병목 완화)
+    # 4. 이미지 전처리 - 리사이즈·포맷 정규화로 입력 크기 축소 (prefill 병목 완화)
     image = Image.open(io.BytesIO(image_bytes))
     image = ImageOps.exif_transpose(image)  # EXIF 방향을 실제 픽셀에 반영 (세로사진이 눕는 것 방지)
     image = image.convert("RGB")  # PNG 투명배경 등도 JPEG로 통일
@@ -122,7 +91,7 @@ def normalize_image(image_bytes: bytes) -> bytes:
 async def score_photo(
     image_bytes: bytes, place_name: str, mission_description: str
 ) -> VlmResult:
-    # 6. 사진 판정 - 이미지+장소명+미션 내용을 VLM한테 주고 관찰→인식→판단→조언을 한 번에 받음
+    # 5. 사진 판정 - 이미지+장소명+미션 내용을 VLM한테 주고 관찰→인식→판단→조언을 한 번에 받음
     # TODO: Retry-After 값(30초)은 baseline 측정 후 확정
     user_prompt = f"목표 장소: {place_name}\n미션 내용: {mission_description}"
     image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
@@ -151,7 +120,7 @@ async def score_photo(
 
 
 def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:
-    # 7. 등급 변환 - match_score 구간으로 success/retry/fail 판정
+    # 6. 등급 변환 - match_score 구간으로 success/retry/fail 판정
     if match_score >= SUCCESS_THRESHOLD:
         return "success"
     if match_score >= RETRY_THRESHOLD:
@@ -167,7 +136,7 @@ def build_response(
     raw_retry_hint: str | None = None,
     reason: Literal["location_mismatch"] | None = None,
 ) -> VerifyResponse:
-    # 8. 응답 조립 - landmark_confidence·retry_hint의 노출 여부를 임계값·등급으로 정한다. 문구는 안 붙임
+    # 7. 응답 조립 - landmark_confidence·retry_hint의 노출 여부를 임계값·등급으로 정한다. 문구는 안 붙임
     landmark_confidence = (
         raw_landmark_confidence
         if raw_landmark_confidence is not None and raw_landmark_confidence >= LANDMARK_THRESHOLD
@@ -185,19 +154,21 @@ def build_response(
 
 
 async def verify_photo(request: VerifyRequest) -> VerifyResponse:
-    # 오케스트레이터 - 판단하지 않고 1~8단계를 순서대로 호출만 한다
+    # 오케스트레이터 - 판단하지 않고 1~7단계를 순서대로 호출만 한다
     assert_allowed_source(request.image_url)  # 1
-    image_bytes = await fetch_image(request.image_url)  # 2
-    exif_gps = extract_gps(image_bytes)  # 3
-    if is_clear_mismatch(exif_gps, request.place_coordinates):  # 4
+    # 좌표가 없으면 위치로는 판정할 수 없으므로 사진 판정(VLM)으로 넘긴다
+    if request.photo_coordinates is not None and is_clear_mismatch(  # 2
+        request.photo_coordinates, request.place_coordinates
+    ):
         return build_response("fail", match_score=0, reason="location_mismatch")
 
-    processed = normalize_image(image_bytes)  # 5
-    vlm = await score_photo(processed, request.place_name, request.mission_description)  # 6
-    result = to_grade(vlm.match_score)  # 7
+    image_bytes = await fetch_image(request.image_url)  # 3
+    processed = normalize_image(image_bytes)  # 4
+    vlm = await score_photo(processed, request.place_name, request.mission_description)  # 5
+    result = to_grade(vlm.match_score)  # 6
 
-    # VLM 원값을 그대로 8번에 넘긴다. 노출 여부는 build_response가 정한다.
-    return build_response(  # 8
+    # VLM 원값을 그대로 7번에 넘긴다. 노출 여부는 build_response가 정한다.
+    return build_response(  # 7
         result,
         vlm.match_score,
         vlm.detected_labels,

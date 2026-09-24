@@ -10,11 +10,9 @@ from app.photomissions.pipeline_verify import (
     LANDMARK_THRESHOLD,
     RETRY_THRESHOLD,
     SUCCESS_THRESHOLD,
-    _dms_to_decimal,
     _haversine_km,
     assert_allowed_source,
     build_response,
-    extract_gps,
     is_clear_mismatch,
     normalize_image,
     to_grade,
@@ -61,34 +59,7 @@ def test_disallowed_host_rejected(allowed_host, url):
     assert exc.value.status_code == 422
 
 
-# 3. extract_gps
-
-def test_extract_gps_reads_coordinates():
-    exif = Image.Exif()
-    exif[0x8825] = {1: "N", 2: (35.0, 50.0, 6.0), 3: "E", 4: (129.0, 13.0, 8.0)}
-    gps = extract_gps(_jpeg_bytes(exif=exif))
-    assert gps.latitude == pytest.approx(35.835)
-    assert gps.longitude == pytest.approx(129.218889, abs=1e-6)
-
-
-def test_extract_gps_returns_none_without_exif():
-    assert extract_gps(_jpeg_bytes()) is None
-
-
-@pytest.mark.parametrize(
-    ("dms", "ref", "expected"),
-    [
-        ((37.0, 30.0, 0.0), "N", 37.5),
-        ((127.0, 0.0, 36.0), "E", 127.01),
-        ((37.0, 30.0, 0.0), "S", -37.5),  # 남위·서경은 음수
-        ((127.0, 0.0, 36.0), "W", -127.01),
-    ],
-)
-def test_dms_to_decimal(dms, ref, expected):
-    assert _dms_to_decimal(dms, ref) == pytest.approx(expected)
-
-
-# 4. is_clear_mismatch
+# 2. is_clear_mismatch
 
 def test_haversine_same_point_is_zero():
     assert _haversine_km(CHEOMSEONGDAE, CHEOMSEONGDAE) == pytest.approx(0)
@@ -99,10 +70,6 @@ def test_haversine_one_degree_latitude():
     a = Coordinates(latitude=35.0, longitude=129.0)
     b = Coordinates(latitude=36.0, longitude=129.0)
     assert _haversine_km(a, b) == pytest.approx(111.195, abs=0.01)
-
-
-def test_no_gps_is_not_mismatch():
-    assert is_clear_mismatch(None, CHEOMSEONGDAE) is False
 
 
 def test_nearby_photo_is_not_mismatch():
@@ -130,7 +97,7 @@ def test_mismatch_boundary():
     assert is_clear_mismatch(outside, CHEOMSEONGDAE) is True
 
 
-# 5. normalize_image
+# 4. normalize_image
 
 def test_normalize_shrinks_long_side_and_keeps_ratio():
     buf = io.BytesIO()
@@ -153,7 +120,7 @@ def test_normalize_applies_exif_orientation():
     assert out.size == (100, 200)
 
 
-# 7. to_grade — 임계값은 임시값이라 숫자 대신 상수로 경계를 확인
+# 6. to_grade — 임계값은 임시값이라 숫자 대신 상수로 경계를 확인
 
 def test_grade_success_at_threshold():
     assert to_grade(SUCCESS_THRESHOLD) == "success"
@@ -170,7 +137,7 @@ def test_grade_fail_below_retry_threshold():
     assert to_grade(0) == "fail"
 
 
-# 8. build_response
+# 7. build_response
 
 def test_landmark_confidence_hidden_below_threshold():
     res = build_response("success", 90, raw_landmark_confidence=LANDMARK_THRESHOLD - 0.1)

@@ -50,6 +50,7 @@ class VerifyRequest(BaseModel):
     place_name: str
     place_coordinates: Coordinates
     mission_description: str
+    photo_coordinates: Coordinates | None = None  # BE가 업로드 시 사진 EXIF에서 뽑은 좌표, 없으면 null
 
 
 class DetectedLabel(BaseModel):
@@ -72,7 +73,7 @@ class VlmResult(BaseModel):
     detected_labels: list[DetectedLabel]  # 관찰: 사진에 무엇이 보이는가
     landmark_confidence: float = Field(ge=0, le=100)  # 인식: 그것이 목표 장소인가
     match_score: float = Field(ge=0, le=100)  # 판단: 미션대로 찍혔는가
-    retry_hint: str  # 조언: 항상 생성. 노출 여부는 8번(build_response)이 정한다
+    retry_hint: str  # 조언: 항상 생성. 노출 여부는 7번(build_response)이 정한다
 
 
 class MissionDescription(BaseModel):

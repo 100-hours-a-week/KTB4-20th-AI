@@ -1,15 +1,20 @@
+import io
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi import HTTPException
 from google.genai import errors
+from PIL import Image
 
+from app.core.config import settings
 from app.photomissions import gemini_client, pipeline_generate, pipeline_verify
 from app.photomissions.schemas import (
+    Coordinates,
     DisplayName,
     MissionDescription,
     MissionPlace,
+    VerifyRequest,
     VlmResult,
 )
 
@@ -215,3 +220,61 @@ async def test_timeout_propagates_as_timeout_after_retry(fake_gemini):
     with pytest.raises(httpx.TimeoutException):
         await _call_generate_structured()
     assert fake.calls == 2
+
+
+# 4. verify_photo — 위치 사전 판정이 사진 다운로드·VLM 호출보다 먼저 일어나는지
+
+CHEOMSEONGDAE = Coordinates(latitude=35.8347, longitude=129.2192)
+
+
+def _verify_request(photo_coordinates: Coordinates | None) -> VerifyRequest:
+    return VerifyRequest(
+        image_url=IMAGE_URL,
+        place_id="places/ChIJ123",
+        place_name="첨성대",
+        place_coordinates=CHEOMSEONGDAE,
+        mission_description="첨성대 정면이 보이게 찍기",
+        photo_coordinates=photo_coordinates,
+    )
+
+
+@pytest.fixture
+def fake_verify_steps(monkeypatch):
+    # 다운로드와 VLM 판정을 가짜로 바꾸고, 각각 불린 횟수를 센다
+    monkeypatch.setattr(settings, "allowed_image_hosts", "my-bucket.s3.ap-northeast-2.amazonaws.com")
+    calls = {"fetch_image": 0, "score_photo": 0}
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10)).save(buf, format="JPEG")
+
+    async def fake_fetch(image_url):
+        calls["fetch_image"] += 1
+        return buf.getvalue()
+
+    async def fake_score(image_bytes, place_name, mission_description):
+        calls["score_photo"] += 1
+        return VLM_RESULT
+
+    monkeypatch.setattr(pipeline_verify, "fetch_image", fake_fetch)
+    monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
+    return calls
+
+
+async def test_far_photo_rejected_before_download_and_vlm(fake_verify_steps):
+    seoul = Coordinates(latitude=37.5665, longitude=126.9780)
+    res = await pipeline_verify.verify_photo(_verify_request(seoul))
+    assert res.result == "fail"
+    assert res.reason == "location_mismatch"
+    assert fake_verify_steps == {"fetch_image": 0, "score_photo": 0}
+
+
+async def test_nearby_photo_goes_to_vlm(fake_verify_steps):
+    nearby = Coordinates(latitude=35.8350, longitude=129.2192)  # 약 40m
+    res = await pipeline_verify.verify_photo(_verify_request(nearby))
+    assert res.reason is None
+    assert fake_verify_steps == {"fetch_image": 1, "score_photo": 1}
+
+
+async def test_missing_photo_coordinates_goes_to_vlm(fake_verify_steps):
+    res = await pipeline_verify.verify_photo(_verify_request(None))
+    assert res.reason is None
+    assert fake_verify_steps == {"fetch_image": 1, "score_photo": 1}
