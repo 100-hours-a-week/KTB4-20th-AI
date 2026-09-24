@@ -6,9 +6,16 @@ from app.trips.schemas.schemas import (
     E_Region,
     Editorial_Summary,
     Location,
+    Member_Survey,
     Place,
 )
+
+# TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
+# 이를 import하는 건 역할 혼동임. REGIONS/HEX_GRID_POINTS/HEX_RADIUS_M/
+# REGION_TO_COLLECTION_AREAS를 별도 constants.py로 분리 필요(배포 후 정리).
+from app.trips.services.collect_places import HEX_GRID_POINTS, HEX_RADIUS_M
 from app.trips.services.db import get_connection
+from app.trips.services.preference import find_matched_members
 
 # DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
 RATINGS_WEIGHT = 0.6
@@ -32,14 +39,22 @@ DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
     E_Breaker.HEIGHT_AVERSION: {
         "observation_deck", "ferris_wheel", "roller_coaster",
     },
-}
-
-# 제외 항목 (목록에 있는 것만 통과, 야외 활동이 많아서 여집합으로 계산)
-INVERTED_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
     E_Breaker.OUTDOOR_ACTIVITY: {
-        "museum", "art_gallery", "art_museum", "history_museum",
-        "concert_hall", "opera_house",
-        "church", "buddhist_temple", "hindu_temple", "mosque", "shinto_shrine", "synagogue",
+        # NATURE_HEALING(18개) - 전부 야외
+        "beach", "island", "lake", "mountain_peak", "nature_preserve",
+        "river", "scenic_spot", "woods", "botanical_garden", "city_park",
+        "garden", "hiking_area", "national_park", "observation_deck",
+        "park", "picnic_ground", "state_park", "wildlife_refuge",
+        # ACTIVITY(37개 중 야외 확정분)
+        "adventure_sports_center", "amusement_park", "zoo", "wildlife_park",
+        "barbecue_area", "cycling_park", "ferris_wheel", "off_roading_area",
+        "roller_coaster", "skateboard_park", "water_park",
+        "fishing_charter", "fishing_pier", "fishing_pond",
+        "golf_course", "race_course", "ski_resort",
+        # 애매했던 것 중 야외로 확정
+        "go_karting_venue", "miniature_golf_course", "paintball_center",
+        "arena", "sports_activity_location", "sports_complex",
+        "stadium", "tennis_court",
     },
 }
 
@@ -56,8 +71,8 @@ def get_DB_places_by_category(
     category: E_Preference,
     preference_score: float,
     limit: int,
+    region: E_Region,
     excluded_types: set[str] | None = None,
-    allowed_types: set[str] | None = None,
 ) -> list[Place]:
     conn = get_connection()
     try:
@@ -73,24 +88,27 @@ def get_DB_places_by_category(
             """
             params: list = [category.value]
 
-            if excluded_types or allowed_types:
+            # 지역 필터: E_Region -> 수집지역명 리스트 -> 각 지역의 중심좌표+반경으로 OR 조건 구성
+            collection_areas = REGION_TO_COLLECTION_AREAS[region]
+            point_conditions = []
+            for area_name in collection_areas:
+                for point in HEX_GRID_POINTS[area_name]:
+                    lat, lon = point
+                    point_conditions.append(
+                        "ST_Distance_Sphere(POINT(p.longitude, p.latitude), POINT(%s, %s)) <= %s"
+                    )
+                    params.extend([lon, lat, HEX_RADIUS_M])
+
+            query += f" AND ({' OR '.join(point_conditions)})"
+
+            if excluded_types:
                 query += """
                     AND p.id NOT IN (
                         SELECT place_id FROM place_types
                         WHERE type IN ({})
                     )
-                """.format(", ".join(["%s"] * len(excluded_types))) if excluded_types else ""
-                if excluded_types:
-                    params.extend(excluded_types)
-
-            if allowed_types:
-                query += """
-                    AND p.id IN (
-                        SELECT place_id FROM place_types
-                        WHERE type IN ({})
-                    )
-                """.format(", ".join(["%s"] * len(allowed_types)))
-                params.extend(allowed_types)
+                """.format(", ".join(["%s"] * len(excluded_types)))
+                params.extend(excluded_types)
 
             query += f"""
                 ORDER BY (p.rating * {RATINGS_WEIGHT}
@@ -142,16 +160,13 @@ def select_places(
     preferences: dict[E_Preference, float],
     slot_counts: dict[E_Preference, int],
     deal_breakers: list[E_Breaker],
+    region: E_Region,
+    members: list[Member_Survey],
 ) -> dict[E_Preference, list[Place]]:
     direct_excluded: set[str] = set()
-    inverted_allowed: set[str] = set()  # "이 목록에 있는 것만 통과"(여집합 방식)
-    has_inverted = False
 
     for breaker in deal_breakers:
         direct_excluded |= DIRECT_EXCLUDE_MAP.get(breaker, set())
-        if breaker in INVERTED_EXCLUDE_MAP:
-            inverted_allowed |= INVERTED_EXCLUDE_MAP[breaker]
-            has_inverted = True
 
     result: dict[E_Preference, list[Place]] = {c: [] for c in E_Preference}
 
@@ -159,10 +174,18 @@ def select_places(
         if count <= 0:
             continue
         db_places = get_DB_places_by_category(
-            category, preferences[category], count,
+            category, preferences[category], count, region,
             excluded_types=direct_excluded,
-            allowed_types=inverted_allowed if has_inverted else None,
         )
+
+        # 이 카테고리에서 그룹 평균보다 높은 멤버들 계산 (카테고리당 한 번만)
+        matched_members = find_matched_members(members, category)
+
+        # 각 장소에 matched_preferences, selected_for 채움
+        for place in db_places:
+            place.matched_preferences = [category]
+            place.selected_for = matched_members
+
         result[category] = db_places
 
     return result
