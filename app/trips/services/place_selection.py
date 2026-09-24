@@ -36,14 +36,22 @@ DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
     E_Breaker.HEIGHT_AVERSION: {
         "observation_deck", "ferris_wheel", "roller_coaster",
     },
-}
-
-# 제외 항목 (목록에 있는 것만 통과, 야외 활동이 많아서 여집합으로 계산)
-INVERTED_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
     E_Breaker.OUTDOOR_ACTIVITY: {
-        "museum", "art_gallery", "art_museum", "history_museum",
-        "concert_hall", "opera_house",
-        "church", "buddhist_temple", "hindu_temple", "mosque", "shinto_shrine", "synagogue",
+        # NATURE_HEALING(18개) - 전부 야외
+        "beach", "island", "lake", "mountain_peak", "nature_preserve",
+        "river", "scenic_spot", "woods", "botanical_garden", "city_park",
+        "garden", "hiking_area", "national_park", "observation_deck",
+        "park", "picnic_ground", "state_park", "wildlife_refuge",
+        # ACTIVITY(37개 중 야외 확정분)
+        "adventure_sports_center", "amusement_park", "zoo", "wildlife_park",
+        "barbecue_area", "cycling_park", "ferris_wheel", "off_roading_area",
+        "roller_coaster", "skateboard_park", "water_park",
+        "fishing_charter", "fishing_pier", "fishing_pond",
+        "golf_course", "race_course", "ski_resort",
+        # 애매했던 것 중 야외로 확정
+        "go_karting_venue", "miniature_golf_course", "paintball_center",
+        "arena", "sports_activity_location", "sports_complex",
+        "stadium", "tennis_court",
     },
 }
 
@@ -62,7 +70,6 @@ def get_DB_places_by_category(
     limit: int,
     region: E_Region,
     excluded_types: set[str] | None = None,
-    allowed_types: set[str] | None = None,
 ) -> list[Place]:
     conn = get_connection()
     try:
@@ -91,24 +98,14 @@ def get_DB_places_by_category(
 
             query += f" AND ({' OR '.join(point_conditions)})"
 
-            if excluded_types or allowed_types:
+            if excluded_types:
                 query += """
                     AND p.id NOT IN (
                         SELECT place_id FROM place_types
                         WHERE type IN ({})
                     )
-                """.format(", ".join(["%s"] * len(excluded_types))) if excluded_types else ""
-                if excluded_types:
-                    params.extend(excluded_types)
-
-            if allowed_types:
-                query += """
-                    AND p.id IN (
-                        SELECT place_id FROM place_types
-                        WHERE type IN ({})
-                    )
-                """.format(", ".join(["%s"] * len(allowed_types)))
-                params.extend(allowed_types)
+                """.format(", ".join(["%s"] * len(excluded_types)))
+                params.extend(excluded_types)
 
             query += f"""
                 ORDER BY (p.rating * {RATINGS_WEIGHT}
@@ -163,14 +160,9 @@ def select_places(
     region: E_Region,
 ) -> dict[E_Preference, list[Place]]:
     direct_excluded: set[str] = set()
-    inverted_allowed: set[str] = set()  # "이 목록에 있는 것만 통과"(여집합 방식)
-    has_inverted = False
 
     for breaker in deal_breakers:
         direct_excluded |= DIRECT_EXCLUDE_MAP.get(breaker, set())
-        if breaker in INVERTED_EXCLUDE_MAP:
-            inverted_allowed |= INVERTED_EXCLUDE_MAP[breaker]
-            has_inverted = True
 
     result: dict[E_Preference, list[Place]] = {c: [] for c in E_Preference}
 
@@ -180,7 +172,6 @@ def select_places(
         db_places = get_DB_places_by_category(
             category, preferences[category], count, region,
             excluded_types=direct_excluded,
-            allowed_types=inverted_allowed if has_inverted else None,
         )
         result[category] = db_places
 
