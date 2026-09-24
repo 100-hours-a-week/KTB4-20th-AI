@@ -199,5 +199,7 @@ def test_location_mismatch_response():
 
 
 def test_detected_labels_passed_through():
-    labels = [DetectedLabel(name="석탑", matched=True)]
-    assert build_response("success", 90, detected_labels=labels).detected_labels == labels
+    input_labels = [DetectedLabel(name="석탑", matched=True)]
+    expected_labels = [DetectedLabel(name="석탑", matched=True)]
+    result = build_response("success", 90, detected_labels=input_labels).detected_labels
+    assert result == expected_labels
