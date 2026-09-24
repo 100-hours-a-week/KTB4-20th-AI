@@ -1,6 +1,7 @@
 from enum import Enum
 
 from pydantic import BaseModel, Field
+
 from app.trips.schemas.schemas import E_Region, Member_Survey, Place
 
 
