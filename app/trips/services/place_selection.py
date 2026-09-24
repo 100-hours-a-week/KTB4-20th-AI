@@ -8,11 +8,12 @@ from app.trips.schemas.schemas import (
     Location,
     Place,
 )
-from app.trips.services.db import get_connection
+
 # TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
 # 이를 import하는 건 역할 혼동임. REGIONS/HEX_GRID_POINTS/HEX_RADIUS_M/
 # REGION_TO_COLLECTION_AREAS를 별도 constants.py로 분리 필요(배포 후 정리).
 from app.trips.services.collect_places import HEX_GRID_POINTS, HEX_RADIUS_M
+from app.trips.services.db import get_connection
 
 # DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
 RATINGS_WEIGHT = 0.6
