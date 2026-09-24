@@ -9,6 +9,10 @@ from app.trips.schemas.schemas import (
     Place,
 )
 from app.trips.services.db import get_connection
+# TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
+# 이를 import하는 건 역할 혼동임. REGIONS/HEX_GRID_POINTS/HEX_RADIUS_M/
+# REGION_TO_COLLECTION_AREAS를 별도 constants.py로 분리 필요(배포 후 정리).
+from app.trips.services.collect_places import HEX_GRID_POINTS, HEX_RADIUS_M
 
 # DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
 RATINGS_WEIGHT = 0.6
@@ -56,6 +60,7 @@ def get_DB_places_by_category(
     category: E_Preference,
     preference_score: float,
     limit: int,
+    region: E_Region,
     excluded_types: set[str] | None = None,
     allowed_types: set[str] | None = None,
 ) -> list[Place]:
@@ -72,6 +77,19 @@ def get_DB_places_by_category(
                 WHERE pc.category = %s
             """
             params: list = [category.value]
+
+            # 지역 필터: E_Region -> 수집지역명 리스트 -> 각 지역의 중심좌표+반경으로 OR 조건 구성
+            collection_areas = REGION_TO_COLLECTION_AREAS[region]
+            point_conditions = []
+            for area_name in collection_areas:
+                for point in HEX_GRID_POINTS[area_name]:
+                    lat, lon = point
+                    point_conditions.append(
+                        "ST_Distance_Sphere(POINT(p.longitude, p.latitude), POINT(%s, %s)) <= %s"
+                    )
+                    params.extend([lon, lat, HEX_RADIUS_M])
+
+            query += f" AND ({' OR '.join(point_conditions)})"
 
             if excluded_types or allowed_types:
                 query += """
@@ -142,6 +160,7 @@ def select_places(
     preferences: dict[E_Preference, float],
     slot_counts: dict[E_Preference, int],
     deal_breakers: list[E_Breaker],
+    region: E_Region,
 ) -> dict[E_Preference, list[Place]]:
     direct_excluded: set[str] = set()
     inverted_allowed: set[str] = set()  # "이 목록에 있는 것만 통과"(여집합 방식)
@@ -159,7 +178,7 @@ def select_places(
         if count <= 0:
             continue
         db_places = get_DB_places_by_category(
-            category, preferences[category], count,
+            category, preferences[category], count, region,
             excluded_types=direct_excluded,
             allowed_types=inverted_allowed if has_inverted else None,
         )
