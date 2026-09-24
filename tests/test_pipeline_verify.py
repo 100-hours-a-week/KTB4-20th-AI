@@ -75,14 +75,17 @@ def test_extract_gps_returns_none_without_exif():
     assert extract_gps(_jpeg_bytes()) is None
 
 
-def test_dms_to_decimal_north_east_positive():
-    assert _dms_to_decimal((37.0, 30.0, 0.0), "N") == pytest.approx(37.5)
-    assert _dms_to_decimal((127.0, 0.0, 36.0), "E") == pytest.approx(127.01)
-
-
-def test_dms_to_decimal_south_west_negative():
-    assert _dms_to_decimal((37.0, 30.0, 0.0), "S") == pytest.approx(-37.5)
-    assert _dms_to_decimal((127.0, 0.0, 36.0), "W") == pytest.approx(-127.01)
+@pytest.mark.parametrize(
+    ("dms", "ref", "expected"),
+    [
+        ((37.0, 30.0, 0.0), "N", 37.5),
+        ((127.0, 0.0, 36.0), "E", 127.01),
+        ((37.0, 30.0, 0.0), "S", -37.5),  # 남위·서경은 음수
+        ((127.0, 0.0, 36.0), "W", -127.01),
+    ],
+)
+def test_dms_to_decimal(dms, ref, expected):
+    assert _dms_to_decimal(dms, ref) == pytest.approx(expected)
 
 
 # 4. is_clear_mismatch
