@@ -1,27 +1,191 @@
-from app.trips.schemas.schemas import E_Preference, Place
+from app.trips.schemas.schemas import (
+    Display_Name,
+    E_Breaker,
+    E_Google_Place_Type,
+    E_Preference,
+    E_Region,
+    Editorial_Summary,
+    Location,
+    Member_Survey,
+    Place,
+)
 
-ALPHA = 0.7
-BETA = 0.3
+# TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
+# 이를 import하는 건 역할 혼동임. REGIONS/HEX_GRID_POINTS/HEX_RADIUS_M/
+# REGION_TO_COLLECTION_AREAS를 별도 constants.py로 분리 필요(배포 후 정리).
+from app.trips.services.collect_places import HEX_GRID_POINTS, HEX_RADIUS_M
+from app.trips.services.db import get_connection
+from app.trips.services.preference import find_matched_members
 
-def get_DB_places_by_category(category: E_Preference, preference_score: float, limit: int) -> list[Place]:
-    # TODO: DB 쿼리로 직접 처리
-    #   ORDER By (preference_score * ALPHA + rating * BETA) DESC
-    #   LIMIT limit
-    return []
+# DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
+RATINGS_WEIGHT = 0.6
+USER_RATING_COUNT_WEIGHT = 0.4
 
-def select_places(preferences: dict[E_Preference, float], slot_counts: dict[E_Preference, int]) -> list[Place]:
-    # 1. 결과를 담을 빈 리스트 result 선언
-    result = []
+# 제외 항목 (목록에 있으면 제외)
+DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
+    E_Breaker.SEAFOOD: {"seafood_restaurant"},
+    E_Breaker.NOISY_PLACE: {
+        "night_club", "amusement_park", "karaoke", "dance_hall",
+        "video_arcade", "comedy_club", "live_music_venue",
+        "amusement_center", "arena", "stadium", "water_park",
+    },
+    E_Breaker.RELIGIOUS_FACILITY: {
+        "church", "buddhist_temple", "hindu_temple",
+        "mosque", "shinto_shrine", "synagogue",
+    },
+    E_Breaker.ANIMAL_FACILITY: {
+        "aquarium", "zoo", "wildlife_park", "wildlife_refuge",
+    },
+    E_Breaker.HEIGHT_AVERSION: {
+        "observation_deck", "ferris_wheel", "roller_coaster",
+    },
+    E_Breaker.OUTDOOR_ACTIVITY: {
+        # NATURE_HEALING(18개) - 전부 야외
+        "beach", "island", "lake", "mountain_peak", "nature_preserve",
+        "river", "scenic_spot", "woods", "botanical_garden", "city_park",
+        "garden", "hiking_area", "national_park", "observation_deck",
+        "park", "picnic_ground", "state_park", "wildlife_refuge",
+        # ACTIVITY(37개 중 야외 확정분)
+        "adventure_sports_center", "amusement_park", "zoo", "wildlife_park",
+        "barbecue_area", "cycling_park", "ferris_wheel", "off_roading_area",
+        "roller_coaster", "skateboard_park", "water_park",
+        "fishing_charter", "fishing_pier", "fishing_pond",
+        "golf_course", "race_course", "ski_resort",
+        # 애매했던 것 중 야외로 확정
+        "go_karting_venue", "miniature_golf_course", "paintball_center",
+        "arena", "sports_activity_location", "sports_complex",
+        "stadium", "tennis_court",
+    },
+}
 
-    # 2. slot_counts를 순회하면서 category, count 선언
+# 지역
+REGION_TO_COLLECTION_AREAS: dict[E_Region, list[str]] = {
+    E_Region.SEOUL: ["서울"],
+    E_Region.BUSAN: ["부산"],
+    E_Region.JEJU: ["제주시권", "서귀포권"],  # 하나의 선택지가 두 수집 지역에 대응
+    E_Region.GYEONGJU: ["경주"],
+    E_Region.JEONJU: ["전주"],
+}
+
+def get_DB_places_by_category(
+    category: E_Preference,
+    preference_score: float,
+    limit: int,
+    region: E_Region,
+    excluded_types: set[str] | None = None,
+) -> list[Place]:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # 1단계: 필터링·정렬된 장소 목록 조회 (id만 걸러내기용 JOIN, type 컬럼은 안 가져옴)
+            query = """
+                SELECT DISTINCT p.id, p.google_place_id, p.name, p.rating,
+                       p.user_rating_count, p.editorial_summary,
+                       p.latitude, p.longitude
+                FROM places p
+                JOIN place_categories pc ON p.id = pc.place_id
+                WHERE pc.category = %s
+            """
+            params: list = [category.value]
+
+            # 지역 필터: E_Region -> 수집지역명 리스트 -> 각 지역의 중심좌표+반경으로 OR 조건 구성
+            collection_areas = REGION_TO_COLLECTION_AREAS[region]
+            point_conditions = []
+            for area_name in collection_areas:
+                for point in HEX_GRID_POINTS[area_name]:
+                    lat, lon = point
+                    point_conditions.append(
+                        "ST_Distance_Sphere(POINT(p.longitude, p.latitude), POINT(%s, %s)) <= %s"
+                    )
+                    params.extend([lon, lat, HEX_RADIUS_M])
+
+            query += f" AND ({' OR '.join(point_conditions)})"
+
+            if excluded_types:
+                query += """
+                    AND p.id NOT IN (
+                        SELECT place_id FROM place_types
+                        WHERE type IN ({})
+                    )
+                """.format(", ".join(["%s"] * len(excluded_types)))
+                params.extend(excluded_types)
+
+            query += f"""
+                ORDER BY (p.rating * {RATINGS_WEIGHT}
+                    + LOG(p.user_rating_count + 1) * {USER_RATING_COUNT_WEIGHT}) DESC
+                LIMIT %s
+            """
+            params.append(limit)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+            if not rows:
+                return []
+
+            # 2단계: 위에서 뽑힌 장소들의 전체 type 목록을 별도로 조회
+            place_ids = [row[0] for row in rows]
+            placeholders = ", ".join(["%s"] * len(place_ids))
+            cursor.execute(
+                f"SELECT place_id, type FROM place_types WHERE place_id IN ({placeholders})",
+                place_ids,
+            )
+            type_rows = cursor.fetchall()
+
+        # place_id별로 type들을 묶음
+        types_by_place_id: dict[int, list[str]] = {}
+        for place_id, type_value in type_rows:
+            types_by_place_id.setdefault(place_id, []).append(type_value)
+
+        return [
+            Place(
+                id=row[1],
+                displayName=Display_Name(text=row[2], languageCode="ko"),
+                location=Location(latitude=row[6], longitude=row[7]),
+                types=[
+                    E_Google_Place_Type(t)
+                    for t in types_by_place_id.get(row[0], [])
+                    if t in E_Google_Place_Type._value2member_map_
+                ],
+                rating=row[3],
+                userRatingCount=row[4],
+                editorialSummary=Editorial_Summary(text=row[5], languageCode="ko") if row[5] else None,
+            )
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+def select_places(
+    preferences: dict[E_Preference, float],
+    slot_counts: dict[E_Preference, int],
+    deal_breakers: list[E_Breaker],
+    region: E_Region,
+    members: list[Member_Survey],
+) -> dict[E_Preference, list[Place]]:
+    direct_excluded: set[str] = set()
+
+    for breaker in deal_breakers:
+        direct_excluded |= DIRECT_EXCLUDE_MAP.get(breaker, set())
+
+    result: dict[E_Preference, list[Place]] = {c: [] for c in E_Preference}
+
     for category, count in slot_counts.items():
-        # (edge case) count가 0이면 제외
-        if count == 0: continue
+        if count <= 0:
+            continue
+        db_places = get_DB_places_by_category(
+            category, preferences[category], count, region,
+            excluded_types=direct_excluded,
+        )
 
-        # DB로부터 정렬·제한된 결과 호출
-        called_places = get_DB_places_by_category(category, preferences[category], count)
+        # 이 카테고리에서 그룹 평균보다 높은 멤버들 계산 (카테고리당 한 번만)
+        matched_members = find_matched_members(members, category)
 
-        # result에 이어붙인다.(extend)
-        result.extend(called_places)
+        # 각 장소에 matched_preferences, selected_for 채움
+        for place in db_places:
+            place.matched_preferences = [category]
+            place.selected_for = matched_members
+
+        result[category] = db_places
 
     return result
