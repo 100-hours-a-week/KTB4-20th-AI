@@ -12,6 +12,9 @@ CLEAR_MISMATCH_KM)을 정하고 2단계 baseline 지표(latency·구조화 출�
 
   같은 --out으로 다시 실행하면 이미 성공한 건은 건너뛰고 이어서 호출한다(에러 난 건은 다시 호출).
   모델·설정을 바꿔 비교할 때는 --out을 따로 써야 결과가 섞이지 않는다.
+
+  # 다른 모델로, 기존 결과 파일에서 성공한 건과 같은 사진·미션만 호출 (모델 비교용)
+  uv run python -m scripts.baseline_verify ... --model gemini-3.1-flash-lite --same-as <pro 결과 jsonl> --out <새 jsonl>
 """
 
 import argparse
@@ -46,9 +49,12 @@ MISSIONS = {
     "월정교": "월정교가 잘 보이게 사진 찍기",
 }
 
-# 6단계 문서 단가(USD / 100만 토큰). 1회 실측 청구액(27원)과 일치 확인함
-INPUT_PER_M = 2.0
-OUTPUT_PER_M = 12.0
+# 유료 단가(USD / 100만 토큰, 입력 / 출력(생각 포함)). ai.google.dev/gemini-api/docs/pricing 기준
+# pro-preview는 1회 실측 청구액(27원)과 일치 확인함
+PRICES = {
+    "gemini-3.1-pro-preview": (2.0, 12.0),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+}
 
 
 def load_mapping(path: pathlib.Path) -> list[dict]:
@@ -135,11 +141,12 @@ async def judge(case: dict, image_bytes: bytes) -> dict:
     record["model_sec"] = round(time.perf_counter() - t1, 3)
 
     u = response.usage_metadata
+    input_per_m, output_per_m = PRICES[gemini_client.MODEL_NAME]
     image_tokens = sum(d.token_count or 0 for d in (u.prompt_tokens_details or []) if "IMAGE" in str(d.modality))
     prompt, output, thoughts = u.prompt_token_count or 0, u.candidates_token_count or 0, u.thoughts_token_count or 0
     record.update(
         prompt_tokens=prompt, image_tokens=image_tokens, output_tokens=output, thought_tokens=thoughts,
-        cost_usd=round(prompt * INPUT_PER_M / 1e6 + (output + thoughts) * OUTPUT_PER_M / 1e6, 6),
+        cost_usd=round(prompt * input_per_m / 1e6 + (output + thoughts) * output_per_m / 1e6, 6),
         parsed=isinstance(response.parsed, VlmResult),
     )
     if isinstance(response.parsed, VlmResult):
@@ -180,11 +187,21 @@ async def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, required=True, help="결과 JSONL 경로 (레포 밖에 둘 것)")
     ap.add_argument("--max-calls", type=int, default=0, help="이번 실행의 최대 호출 수 (0이면 제한 없음)")
     ap.add_argument("--dry-run", action="store_true", help="호출하지 않고 계획만 출력")
+    ap.add_argument("--model", default=gemini_client.MODEL_NAME, choices=sorted(PRICES), help="판정 모델")
+    ap.add_argument("--same-as", type=pathlib.Path, help="이 결과 파일에서 성공한 건과 같은 사진·미션만 호출")
     args = ap.parse_args()
+    if args.same_as and args.same_as.resolve() == args.out.resolve():
+        ap.error("--same-as와 --out은 다른 파일이어야 함")
+    # judge는 호출할 때마다 gemini_client.MODEL_NAME을 읽으므로 여기서 바꾸면 이 실행 전체가 이 모델로 판정한다
+    gemini_client.MODEL_NAME = args.model
 
     rows = load_mapping(args.mapping)
     index = index_photos(args.photos)
     cases = build_cases(rows, set(index), args.per_place, args.seed)
+    if args.same_as:
+        base = [json.loads(line) for line in args.same_as.read_text(encoding="utf-8").splitlines() if line.strip()]
+        keep = {case_key(r) for r in base if "error" not in r}
+        cases = [c for c in cases if case_key(c) in keep]
     done = set()
     if args.out.exists():
         records = [json.loads(line) for line in args.out.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -193,12 +210,15 @@ async def main() -> None:
     if args.max_calls:
         todo = todo[: args.max_calls]
 
+    print(f"모델: {gemini_client.MODEL_NAME}")
     print(f"매핑 {len(rows)}장 중 찾은 사진 {sum(r['photo'] in index for r in rows)}장")
     for place in LANDMARKS:
         n = sum(1 for c in cases if c["place"] == place) // 2
         print(f"  {place}: 표본 {n}장")
     print(f"케이스 {len(cases)}건 (이미 기록 {len(done & {case_key(c) for c in cases})}건) → 이번에 호출할 것 {len(todo)}건")
-    print(f"예상 비용: 약 {len(todo) * 27:,}원 (1회 27원 실측 기준)")
+    # pro-preview 1회 27원 실측을 단가 비율로 환산한 대략값. 토큰 수가 모델마다 달라 실제와 차이날 수 있다
+    per_call_won = 27 * PRICES[gemini_client.MODEL_NAME][0] / PRICES["gemini-3.1-pro-preview"][0]
+    print(f"예상 비용: 약 {len(todo) * per_call_won:,.0f}원 (pro-preview 1회 27원 실측을 단가 비율로 환산)")
     if args.dry_run:
         for c in todo[:6]:
             print(f"  - {c['photo']} ({c['place']} 사진) → 목표 {c['target']} [{c['kind']}]")
