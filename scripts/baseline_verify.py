@@ -94,12 +94,13 @@ def read_photo(location: tuple[pathlib.Path, str | None]) -> bytes:
 
 def build_cases(rows: list[dict], available: set[str], per_place: int, seed: int) -> list[dict]:
     # 장소마다 사진 per_place장을 뽑아, 같은 장소 미션(positive)과 다른 장소 미션(negative)을 한 번씩 만든다
-    rng = random.Random(seed)
+    # 장소별로 순서를 한 번 섞어두고 앞에서부터 가져가서, per_place를 늘려도 앞서 뽑힌 사진은 그대로 유지된다
     cases = []
     for place in LANDMARKS:
         pool = sorted((r for r in rows if r["place"] == place and r["photo"] in available), key=lambda r: r["photo"])
-        for r in rng.sample(pool, min(per_place, len(pool))):
-            other = rng.choice([p for p in LANDMARKS if p != place])
+        random.Random(f"{seed}-{place}").shuffle(pool)
+        for r in pool[:per_place]:
+            other = random.Random(f"{seed}-{r['photo']}").choice([p for p in LANDMARKS if p != place])
             for kind, target in (("positive", place), ("negative", other)):
                 cases.append({**r, "kind": kind, "target": target})
     return cases
