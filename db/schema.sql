@@ -17,7 +17,7 @@ CREATE TABLE ai_place_categories (
     id INT AUTO_INCREMENT PRIMARY KEY,
     place_id INT NOT NULL,
     category VARCHAR(30) NOT NULL,
-    FOREIGN KEY (place_id) REFERENCES places(id),
+    FOREIGN KEY (place_id) REFERENCES ai_places(id),
     INDEX idx_category (category)
 );
 
@@ -26,5 +26,5 @@ CREATE TABLE ai_place_types (
     id INT AUTO_INCREMENT PRIMARY KEY,
     place_id INT NOT NULL,
     type VARCHAR(50) NOT NULL,
-    FOREIGN KEY (place_id) REFERENCES places(id)
+    FOREIGN KEY (place_id) REFERENCES ai_places(id)
 );
