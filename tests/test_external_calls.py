@@ -87,6 +87,14 @@ async def test_timeout_maps_to_504(monkeypatch, module, call):
     assert exc.value.status_code == 504
 
 
+async def test_score_photo_schema_mismatch_after_retry_maps_to_502(monkeypatch):
+    # 재시도 후에도 응답이 스키마와 맞지 않으면 generate_structured가 ValueError를 올린다
+    monkeypatch.setattr(pipeline_verify, "generate_structured", _raising(ValueError("fake")))
+    with pytest.raises(HTTPException) as exc:
+        await _score()
+    assert exc.value.status_code == 502
+
+
 async def test_score_photo_returns_vlm_result(monkeypatch):
     monkeypatch.setattr(pipeline_verify, "generate_structured", _returning(VLM_RESULT))
     assert await _score() == VLM_RESULT
