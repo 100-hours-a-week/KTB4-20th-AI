@@ -80,10 +80,10 @@ def get_DB_places_by_category(
             # 1단계: 필터링·정렬된 장소 목록 조회 (id만 걸러내기용 JOIN, type 컬럼은 안 가져옴)
             query = """
                 SELECT DISTINCT p.id, p.google_place_id, p.name, p.rating,
-                       p.user_rating_count, p.editorial_summary,
-                       p.latitude, p.longitude
-                FROM places p
-                JOIN place_categories pc ON p.id = pc.place_id
+                    p.user_rating_count, p.editorial_summary,
+                    p.latitude, p.longitude
+                FROM ai_places p
+                JOIN ai_place_categories pc ON p.id = pc.place_id
                 WHERE pc.category = %s
             """
             params: list = [category.value]
@@ -104,7 +104,7 @@ def get_DB_places_by_category(
             if excluded_types:
                 query += """
                     AND p.id NOT IN (
-                        SELECT place_id FROM place_types
+                        SELECT place_id FROM ai_place_types
                         WHERE type IN ({})
                     )
                 """.format(", ".join(["%s"] * len(excluded_types)))
@@ -127,7 +127,7 @@ def get_DB_places_by_category(
             place_ids = [row[0] for row in rows]
             placeholders = ", ".join(["%s"] * len(place_ids))
             cursor.execute(
-                f"SELECT place_id, type FROM place_types WHERE place_id IN ({placeholders})",
+                f"SELECT place_id, type FROM ai_place_types WHERE place_id IN ({placeholders})",
                 place_ids,
             )
             type_rows = cursor.fetchall()

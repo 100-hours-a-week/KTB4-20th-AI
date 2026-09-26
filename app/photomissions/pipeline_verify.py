@@ -134,7 +134,6 @@ def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:
 
 
 def build_response(
-    result: Literal["success", "retry", "fail"],
     match_score: float,
     detected_labels: list[DetectedLabel] | None = None,
     raw_landmark_confidence: float | None = None,
@@ -142,6 +141,8 @@ def build_response(
     reason: Literal["location_mismatch"] | None = None,
 ) -> VerifyResponse:
     # 7. 응답 조립 - landmark_confidence·retry_hint의 노출 여부를 임계값·등급으로 정한다. 문구는 안 붙임
+    # 등급은 점수로만 정해지므로 받지 않고 여기서 6번을 호출한다. 점수와 어긋난 등급이 응답에 들어갈 수 없다
+    result = to_grade(match_score)
     landmark_confidence = (
         raw_landmark_confidence
         if raw_landmark_confidence is not None and raw_landmark_confidence >= LANDMARK_THRESHOLD
@@ -165,16 +166,14 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
     if request.photo_coordinates is not None and is_clear_mismatch(  # 2
         request.photo_coordinates, request.place_coordinates
     ):
-        return build_response("fail", match_score=0, reason="location_mismatch")
+        return build_response(match_score=0, reason="location_mismatch")  # 6번에서 fail이 된다
 
     image_bytes = await fetch_image(request.image_url)  # 3
     processed = normalize_image(image_bytes)  # 4
     vlm = await score_photo(processed, request.place_name, request.mission_description)  # 5
-    result = to_grade(vlm.match_score)  # 6
 
-    # VLM 원값을 그대로 7번에 넘긴다. 노출 여부는 build_response가 정한다.
-    return build_response(  # 7
-        result,
+    # VLM 원값을 그대로 7번에 넘긴다. 등급(6번)과 노출 여부는 build_response가 정한다.
+    return build_response(  # 6·7
         vlm.match_score,
         vlm.detected_labels,
         raw_landmark_confidence=vlm.landmark_confidence,
