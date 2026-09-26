@@ -77,10 +77,5 @@ class VlmResult(BaseModel):
 
 
 class MissionDescription(BaseModel):
-    number: int  # 프롬프트에서 장소에 붙인 번호(1부터). place_id는 길어서 모델이 옮겨 적다 틀릴 수 있어 번호로 짝짓는다
     description: str
     scope: Literal["PERSONAL", "GROUP"]  # 한 사람 사진이 다른 사람 몫을 대신할 수 있으면 GROUP
-
-
-class MissionBatch(BaseModel):
-    missions: list[MissionDescription]  # 장소 전부의 미션을 한 번의 호출로 받는다
