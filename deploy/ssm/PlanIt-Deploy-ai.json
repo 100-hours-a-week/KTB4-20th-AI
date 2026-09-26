@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Recreate AI service and check health",
+  "parameters": {
+    "imageDigest": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "deploy",
+      "inputs": {
+        "timeoutSeconds": "1200",
+        "runCommand": [
+          "bash <<'BASH'",
+          "set -euo pipefail",
+          "umask 077",
+          "cd /home/ubuntu/planit",
+          "",
+          "[[ \"$SSM_imageDigest\" =~ ^sha256:[0-9a-f]{64}$ ]]",
+          "IMAGE=\"577483323183.dkr.ecr.ap-northeast-2.amazonaws.com/planit/ai@$SSM_imageDigest\"",
+          "",
+          "unset FE_IMAGE BE_IMAGE AI_IMAGE",
+          "export AI_IMAGE=\"$IMAGE\"",
+          "COMPOSE=(docker compose --env-file .env --env-file images/frontend.env --env-file images/backend.env --env-file images/ai.env -f compose.yaml)",
+          "\"${COMPOSE[@]}\" config --quiet",
+          "",
+          "printf 'Previous image: '",
+          "docker inspect planit-ai-1 --format '{{.Config.Image}}'",
+          "",
+          "aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS --password-stdin 577483323183.dkr.ecr.ap-northeast-2.amazonaws.com",
+          "timeout 300 \"${COMPOSE[@]}\" pull ai",
+          "",
+          "printf 'AI_IMAGE=%s\\n' \"$IMAGE\" > images/ai.env.tmp",
+          "mv images/ai.env.tmp images/ai.env",
+          "timeout 180 \"${COMPOSE[@]}\" up -d --no-deps ai",
+          "",
+          "for attempt in $(seq 1 60); do",
+          "  if docker exec planit-nginx-1 wget -qO- -T 5 http://ai:8000/health |",
+          "     grep -Eq '\"status\"[[:space:]]*:[[:space:]]*\"ok\"'; then",
+          "    echo 'Deployment and health check succeeded'",
+          "    echo \"Image: $IMAGE\"",
+          "    exit 0",
+          "  fi",
+          "  sleep 5",
+          "done",
+          "",
+          "echo 'Health check failed; manual rollback is required' >&2",
+          "exit 1",
+          "BASH"
+        ]
+      }
+    }
+  ]
+}
