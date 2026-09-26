@@ -20,14 +20,17 @@ from app.photomissions.schemas import (
 )
 
 _EARTH_RADIUS_KM = 6371.0
-CLEAR_MISMATCH_KM = 5.0  # TODO: 2단계 평가셋으로 확정 전 임시값
+# 평가셋에서 맞는 사진은 목표에서 최대 1.6km라 5km에서 잘못 반려된 사진이 없었다. 줄이면 넓은 장소에서 오반려 위험이 있다
+CLEAR_MISMATCH_KM = 5.0
 
 _MAX_DIMENSION = 1024  # TODO: baseline 측정(2단계) 후 토큰·정확도 트레이드오프로 조정
 _JPEG_QUALITY = 85
 
-SUCCESS_THRESHOLD = 70.0  # TODO: 2단계 평가셋으로 확정 전 임시값
-RETRY_THRESHOLD = 40.0  # TODO: 2단계 평가셋으로 확정 전 임시값
-LANDMARK_THRESHOLD = 60.0  # TODO: 2단계 평가셋으로 확정 전 임시값
+# 2단계 평가셋(경주 4곳 400건, 사람이 매긴 정답 200장)으로 gemini-3.1-pro-preview 기준 확정.
+# 점수 분포는 모델마다 달라서 모델을 바꾸면 다시 측정해야 한다
+SUCCESS_THRESHOLD = 90.0  # 정답 성공 사진은 66장 중 65장이 90점 이상, 70~89점은 정답 재시도·실패뿐이었다
+RETRY_THRESHOLD = 40.0
+LANDMARK_THRESHOLD = 60.0  # 정답 성공 사진의 인식 신뢰도는 전부 95 이상, 정답 실패 사진은 중앙값 10
 
 
 def assert_allowed_source(image_url: str) -> None:
