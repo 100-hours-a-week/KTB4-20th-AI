@@ -117,6 +117,11 @@ async def score_photo(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="사진 판정 시간 초과",
         ) from e
+    except ValueError as e:  # 재시도 후에도 응답이 스키마와 맞지 않음
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="사진 판정 실패",
+        ) from e
 
 
 def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:
