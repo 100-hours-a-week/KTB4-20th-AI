@@ -156,7 +156,7 @@ def count_places() -> int:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT COUNT(*) FROM places")
+            cursor.execute("SELECT COUNT(*) FROM ai_places")
             result = cursor.fetchone()
         return result[0]
     finally:
@@ -171,7 +171,7 @@ def insert_place_category(place_row_id: int, category: str) -> None:
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO place_categories (place_id, category) VALUES (%s, %s)",
+                "INSERT INTO ai_place_categories (place_id, category) VALUES (%s, %s)",
                 (place_row_id, category),
             )
         conn.commit()
@@ -184,7 +184,7 @@ def insert_place_type(place_row_id: int, type_value: str) -> None:
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO place_types (place_id, type) VALUES (%s, %s)",
+                "INSERT INTO ai_place_types (place_id, type) VALUES (%s, %s)",
                 (place_row_id, type_value),
             )
         conn.commit()
@@ -203,7 +203,7 @@ def insert_place(place_data: dict) -> int:
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO places (
+                INSERT INTO ai_places (
                     google_place_id, name, rating, user_rating_count,
                     editorial_summary, latitude, longitude,
                     created_at, updated_at
@@ -235,7 +235,7 @@ def place_exists(google_place_id: str) -> bool:
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT 1 FROM places WHERE google_place_id = %s LIMIT 1",
+                "SELECT 1 FROM ai_places WHERE google_place_id = %s LIMIT 1",
                 (google_place_id,),
             )
             result = cursor.fetchone()
@@ -351,9 +351,9 @@ def collect_places() -> None:
                     try:
                         # 4. 응답으로 받은 장소들마다:
                         #    - google_place_id가 이미 DB에 있는지 SELECT로 확인
-                        #    - 없으면 INSERT INTO places (Prepared Statement)
-                        #    - INSERT INTO place_categories (해당 category)
-                        #    - INSERT INTO place_types (응답의 types 배열 전부)
+                        #    - 없으면 INSERT INTO ai_places (Prepared Statement)
+                        #    - INSERT INTO ai_place_categories (해당 category)
+                        #    - INSERT INTO ai_place_types (응답의 types 배열 전부)
                         for place_data in response.get("places", []):
                             google_place_id = place_data["id"]
 
