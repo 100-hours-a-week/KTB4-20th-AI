@@ -139,25 +139,34 @@ def test_grade_fail_below_retry_threshold():
 
 # 7. build_response
 
+@pytest.mark.parametrize(
+    "score",
+    [0, RETRY_THRESHOLD - 0.1, RETRY_THRESHOLD, SUCCESS_THRESHOLD - 0.1, SUCCESS_THRESHOLD, 100],
+)
+def test_result_follows_score(score):
+    # 등급은 점수로만 정해진다. 경계값에서도 to_grade와 같아야 한다
+    assert build_response(score).result == to_grade(score)
+
+
 def test_landmark_confidence_hidden_below_threshold():
-    res = build_response("success", 90, raw_landmark_confidence=LANDMARK_THRESHOLD - 0.1)
+    res = build_response(90, raw_landmark_confidence=LANDMARK_THRESHOLD - 0.1)
     assert res.landmark_confidence is None
 
 
 def test_landmark_confidence_shown_at_threshold():
-    res = build_response("success", 90, raw_landmark_confidence=LANDMARK_THRESHOLD)
+    res = build_response(90, raw_landmark_confidence=LANDMARK_THRESHOLD)
     assert res.landmark_confidence == LANDMARK_THRESHOLD
 
 
 def test_retry_hint_only_on_retry():
     hint = "정면에서 다시 찍어보세요"
-    assert build_response("retry", 50, raw_retry_hint=hint).retry_hint == hint
-    assert build_response("success", 90, raw_retry_hint=hint).retry_hint is None
-    assert build_response("fail", 10, raw_retry_hint=hint).retry_hint is None
+    assert build_response(RETRY_THRESHOLD, raw_retry_hint=hint).retry_hint == hint
+    assert build_response(SUCCESS_THRESHOLD, raw_retry_hint=hint).retry_hint is None
+    assert build_response(RETRY_THRESHOLD - 0.1, raw_retry_hint=hint).retry_hint is None
 
 
 def test_location_mismatch_response():
-    res = build_response("fail", match_score=0, reason="location_mismatch")
+    res = build_response(match_score=0, reason="location_mismatch")
     assert res.result == "fail"
     assert res.reason == "location_mismatch"
     assert res.detected_labels == []
@@ -168,5 +177,5 @@ def test_location_mismatch_response():
 def test_detected_labels_passed_through():
     input_labels = [DetectedLabel(name="석탑", matched=True)]
     expected_labels = [DetectedLabel(name="석탑", matched=True)]
-    result = build_response("success", 90, detected_labels=input_labels).detected_labels
+    result = build_response(90, detected_labels=input_labels).detected_labels
     assert result == expected_labels
