@@ -19,7 +19,7 @@ class Place_Selection_Request(BaseModel):
     region: E_Region
     start_date: date
     end_date: date
-    members: list[Member_Survey]
+    members: list[Member_Survey] = Field(min_length=2, max_length=8)
 
     @field_validator('start_date')
     @classmethod
@@ -37,6 +37,14 @@ class Place_Selection_Request(BaseModel):
         if end_date_value < start_date_value:
             raise ValueError("종료일은 시작일 이후여야 합니다.")
         return end_date_value
+
+    @field_validator('members')
+    @classmethod
+    def validate_user_id_unique(cls, members_value: list[Member_Survey]) -> list[Member_Survey]:
+        user_ids = [member.user.user_id for member in members_value]
+        if len(user_ids) != len(set(user_ids)):
+            raise ValueError('user_id는 중복될 수 없음')
+        return members_value
 
 
 class Place_Selection_Response_Data(BaseModel):
