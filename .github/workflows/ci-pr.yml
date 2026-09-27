@@ -52,6 +52,8 @@ jobs:
         run: uv run --no-sync python -m compileall -q app
 
       - name: Test
+        env:
+          INTERNAL_SERVICE_TOKEN: ${{ vars.INTERNAL_SERVICE_TOKEN }}
         run: uv run --no-sync pytest
 
       - name: Build Docker image
