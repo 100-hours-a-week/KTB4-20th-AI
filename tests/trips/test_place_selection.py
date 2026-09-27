@@ -1,13 +1,7 @@
-"""
-테스트 구현 목록
-1. place_selection (진행 중)
-2. course_recommendation (예정)
-3. precheck (예정)
-"""
 import pytest
 
-from app.trips.schemas.schemas import E_Region, E_Breaker
-from tests.constants import YESTERDAY, TODAY, TOMORROW
+from app.trips.schemas.schemas import E_Breaker, E_Region
+from tests.constants import TODAY, TOMORROW, VALID_MEMBERS, YESTERDAY
 
 PLACE_SELECTION_URL = "/trips/place-selection"
 
@@ -23,25 +17,19 @@ PLACE_SELECTION_URL = "/trips/place-selection"
 
 # ---------------- 1. 지역 ----------------
 class TestRegion:
-    # 1. 고정 파라미터 작성
-    MEMBERS = [
-        {'user': { 'user_id': "user_1" }, "survey_result": [3]*15, "deal_breakers": []},
-        {'user': { 'user_id': "user_2" }, "survey_result": [3]*15, "deal_breakers": []},
-    ]
-
-    # 2. 각 상황별 Request Body 조합
+    # 1. 각 상황별 Request Body 조합
     def make_region_request_body(self, region_value, omit_field=None):
         request_body = {
             "region": region_value,
             "start_date": TODAY.isoformat(),
             "end_date": TODAY.isoformat(),
-            "members": self.MEMBERS,
+            "members": VALID_MEMBERS,
         }
         if omit_field:
             request_body.pop(omit_field)
         return request_body
 
-    # 3. 성공 케이스
+    # 2. 성공 케이스
     @pytest.mark.parametrize("region_value", [
         pytest.param(region.value, id=region.name) for region in E_Region
     ])
@@ -53,7 +41,7 @@ class TestRegion:
         )
         assert response.status_code == 200, response.json()
 
-    # 4. 실패 케이스
+    # 3. 실패 케이스
     @pytest.mark.parametrize('region_value, omit_field', [
         # 비즈니스 규칙 위반 (미지원 지역)
         pytest.param("강원도", None, id="region_not_supported"),
@@ -86,10 +74,6 @@ class TestRegion:
 class TestPeriod:
     # 1. 고정 파라미터 작성
     REGION = E_Region.SEOUL.value
-    MEMBERS = [
-        {'user': { 'user_id': "user_1" }, "survey_result": [3]*15, "deal_breakers": []},
-        {'user': { 'user_id': "user_2" }, "survey_result": [3]*15, "deal_breakers": []},
-    ]
 
     # 2. 각 상황별 Request Body(dict) 조합
     def make_period_request_body(self, start_date_value, end_date_value, omit_field=None):
@@ -97,7 +81,7 @@ class TestPeriod:
             "region": self.REGION,
             "start_date": start_date_value,
             "end_date": end_date_value,
-            "members": self.MEMBERS,
+            "members": VALID_MEMBERS,
         }
         if omit_field:
             request_body.pop(omit_field)
