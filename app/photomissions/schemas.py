@@ -50,6 +50,7 @@ class VerifyRequest(BaseModel):
     place_name: str
     place_coordinates: Coordinates
     mission_description: str
+    photo_coordinates: Coordinates | None = None  # BE가 업로드 시 사진 EXIF에서 뽑은 좌표, 없으면 null
 
 
 class DetectedLabel(BaseModel):
@@ -72,9 +73,14 @@ class VlmResult(BaseModel):
     detected_labels: list[DetectedLabel]  # 관찰: 사진에 무엇이 보이는가
     landmark_confidence: float = Field(ge=0, le=100)  # 인식: 그것이 목표 장소인가
     match_score: float = Field(ge=0, le=100)  # 판단: 미션대로 찍혔는가
-    retry_hint: str  # 조언: 항상 생성. 노출 여부는 8번(build_response)이 정한다
+    retry_hint: str  # 조언: 항상 생성. 노출 여부는 7번(build_response)이 정한다
 
 
 class MissionDescription(BaseModel):
+    number: int  # 프롬프트에서 장소에 붙인 번호(1부터). place_id는 길어서 모델이 옮겨 적다 틀릴 수 있어 번호로 짝짓는다
     description: str
     scope: Literal["PERSONAL", "GROUP"]  # 한 사람 사진이 다른 사람 몫을 대신할 수 있으면 GROUP
+
+
+class MissionBatch(BaseModel):
+    missions: list[MissionDescription]  # 장소 전부의 미션을 한 번의 호출로 받는다

@@ -4,51 +4,128 @@ from pydantic import BaseModel, Field
 
 
 # Enum
+class E_Region(str, Enum):
+    SEOUL = "서울"
+    BUSAN = "부산"
+    JEJU = "제주"
+    GYEONGJU = "경주"
+    JEONJU = "전주"
+
 class E_Breaker(str, Enum):
     """회피조건. 전부 '사용자가 절대 하고 싶지 않은 것'이라는 같은 성격.
     OUTDOOR_ACTIVITY만 회피 대상(야외)이 너무 많아,
     여집합(실내)으로 구현(DIRECT/INVERTED_EXCLUDE_MAP에서 처리)."""
     NOISY_PLACE = "시끄러운_곳"
     OUTDOOR_ACTIVITY = "야외_활동"
-    DRINKING = "술자리"
     SEAFOOD = "해산물"
+    RELIGIOUS_FACILITY = "종교시설"
+    ANIMAL_FACILITY = "동물시설"
+    HEIGHT_AVERSION = "고소공포"
 
 class E_Google_Place_Type(str, Enum):
-    """Google Places type. 312개 전수 검토 중 확정 93개 발췌.
-    Food and Drink(159개)는 전체 Enum화 대신 별도 상수 목록으로 관리 예정."""
-    # HISTORY_CULTURE
+    """Google Places type. 312개 전수 검토 중 확정 93개 반영."""
+    # HISTORY_CULTURE (23개)
     MUSEUM = "museum"
     ART_GALLERY = "art_gallery"
     ART_MUSEUM = "art_museum"
+    AUDITORIUM = "auditorium"
+    CASTLE = "castle"
+    CULTURAL_LANDMARK = "cultural_landmark"
+    HISTORICAL_PLACE = "historical_place"
     HISTORY_MUSEUM = "history_museum"
+    MONUMENT = "monument"
+    PERFORMING_ARTS_THEATER = "performing_arts_theater"
+    SCULPTURE = "sculpture"
+    AMPHITHEATRE = "amphitheatre"
     CONCERT_HALL = "concert_hall"
+    CULTURAL_CENTER = "cultural_center"
+    HISTORICAL_LANDMARK = "historical_landmark"
     OPERA_HOUSE = "opera_house"
+    PHILHARMONIC_HALL = "philharmonic_hall"
     CHURCH = "church"
     BUDDHIST_TEMPLE = "buddhist_temple"
     HINDU_TEMPLE = "hindu_temple"
     MOSQUE = "mosque"
     SHINTO_SHRINE = "shinto_shrine"
     SYNAGOGUE = "synagogue"
-    # NATURE_HEALING
-    PARK = "park"
-    NATIONAL_PARK = "national_park"
+
+    # NATURE_HEALING (18개)
     BEACH = "beach"
-    # ACTIVITY
-    AMUSEMENT_PARK = "amusement_park"
-    NIGHT_CLUB = "night_club"
-    KARAOKE = "karaoke"
-    DANCE_HALL = "dance_hall"
-    VIDEO_ARCADE = "video_arcade"
-    COMEDY_CLUB = "comedy_club"
-    LIVE_MUSIC_VENUE = "live_music_venue"
+    ISLAND = "island"
+    LAKE = "lake"
+    MOUNTAIN_PEAK = "mountain_peak"
+    NATURE_PRESERVE = "nature_preserve"
+    RIVER = "river"
+    SCENIC_SPOT = "scenic_spot"
+    WOODS = "woods"
+    BOTANICAL_GARDEN = "botanical_garden"
+    CITY_PARK = "city_park"
+    GARDEN = "garden"
+    HIKING_AREA = "hiking_area"
+    NATIONAL_PARK = "national_park"
+    OBSERVATION_DECK = "observation_deck"
+    PARK = "park"
+    PICNIC_GROUND = "picnic_ground"
+    STATE_PARK = "state_park"
+    WILDLIFE_REFUGE = "wildlife_refuge"
+
+    # ACTIVITY (37개)
+    ADVENTURE_SPORTS_CENTER = "adventure_sports_center"
     AMUSEMENT_CENTER = "amusement_center"
-    ARENA = "arena"
-    STADIUM = "stadium"
+    AMUSEMENT_PARK = "amusement_park"
+    AQUARIUM = "aquarium"
+    ZOO = "zoo"
+    WILDLIFE_PARK = "wildlife_park"
+    BARBECUE_AREA = "barbecue_area"
+    BOWLING_ALLEY = "bowling_alley"
+    COMEDY_CLUB = "comedy_club"
+    CYCLING_PARK = "cycling_park"
+    DANCE_HALL = "dance_hall"
+    FERRIS_WHEEL = "ferris_wheel"
+    GO_KARTING_VENUE = "go_karting_venue"
+    KARAOKE = "karaoke"
+    LIVE_MUSIC_VENUE = "live_music_venue"
+    MINIATURE_GOLF_COURSE = "miniature_golf_course"
+    NIGHT_CLUB = "night_club"
+    OFF_ROADING_AREA = "off_roading_area"
+    PAINTBALL_CENTER = "paintball_center"
+    ROLLER_COASTER = "roller_coaster"
+    SKATEBOARD_PARK = "skateboard_park"
+    VIDEO_ARCADE = "video_arcade"
     WATER_PARK = "water_park"
-    # CONVENIENCE_SHOPPING
-    SHOPPING_MALL = "shopping_mall"
+    ARENA = "arena"
+    FISHING_CHARTER = "fishing_charter"
+    FISHING_PIER = "fishing_pier"
+    FISHING_POND = "fishing_pond"
+    GOLF_COURSE = "golf_course"
+    ICE_SKATING_RINK = "ice_skating_rink"
+    INDOOR_GOLF_COURSE = "indoor_golf_course"
+    RACE_COURSE = "race_course"
+    SKI_RESORT = "ski_resort"
+    SPORTS_ACTIVITY_LOCATION = "sports_activity_location"
+    SPORTS_COMPLEX = "sports_complex"
+    STADIUM = "stadium"
+    SWIMMING_POOL = "swimming_pool"
+    TENNIS_COURT = "tennis_court"
+
+    # CONVENIENCE_SHOPPING (15개)
+    CLOTHING_STORE = "clothing_store"
+    COSMETICS_STORE = "cosmetics_store"
+    DEPARTMENT_STORE = "department_store"
+    FARMERS_MARKET = "farmers_market"
+    FLEA_MARKET = "flea_market"
+    GIFT_SHOP = "gift_shop"
+    JEWELRY_STORE = "jewelry_store"
     MARKET = "market"
-    # FOOD(대표값만 — 전체 159개는 별도 관리)
+    SHOPPING_MALL = "shopping_mall"
+    MASSAGE = "massage"
+    MASSAGE_SPA = "massage_spa"
+    SAUNA = "sauna"
+    SPA = "spa"
+    WELLNESS_CENTER = "wellness_center"
+    YOGA_STUDIO = "yoga_studio"
+
+    # FOOD(대표값 — 전체 159개는 별도 상수 목록 관리 예정)
     RESTAURANT = "restaurant"
     CAFE = "cafe"
     BAKERY = "bakery"
@@ -65,7 +142,8 @@ class E_Google_Place_Type(str, Enum):
     IRISH_PUB = "irish_pub"
     GASTROPUB = "gastropub"
     BREWPUB = "brewpub"
-    # 기타(제외 판정용)
+
+    # 기타(제외 판정용 참고)
     TOURIST_ATTRACTION = "tourist_attraction"
     POINT_OF_INTEREST = "point_of_interest"
 
@@ -79,10 +157,14 @@ class E_Preference(str, Enum):
 
 # --- 공통 값 객체 ---
 
-class Display_Name(BaseModel):
-    """장소 표시 이름. Google Places 응답의 displayName(LocalizedText) 그대로."""
+class Editorial_Summary(BaseModel):
+    """장소 요약 설명. Google Places API의 LocalizedText 구조"""
     text: str
     languageCode: str
+
+
+class Display_Name(Editorial_Summary):
+    """장소 표시 이름. Google Places API의 LocalizedText 구조"""
 
 
 class Location(BaseModel):
@@ -104,7 +186,7 @@ class GooglePlaceData(BaseModel):
     types: list[E_Google_Place_Type]
     rating: float
     userRatingCount: int
-    editorialSummary: str | None = None
+    editorialSummary: Editorial_Summary | None = None
 
 
 class Place(GooglePlaceData):
@@ -118,4 +200,3 @@ class Member_Survey(BaseModel):
     user: User
     survey_result: list[int] = Field(min_length=15, max_length=15)
     deal_breakers: list[E_Breaker] = Field(default_factory=list)
-    must_visit: list[Place] = Field(default_factory=list)

@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     internal_service_token: str = ""
     allowed_image_hosts: str = ""  # 쉼표로 구분한 허용 호스트 목록 (SSRF 방지)
+    google_places_api_key: str = ""
+    db_host: str = "localhost"
+    db_port: int = 3306
+    db_user: str = ""
+    db_password: str = ""
+    db_name: str = ""
 
     @property
     def allowed_image_hosts_list(self) -> list[str]:

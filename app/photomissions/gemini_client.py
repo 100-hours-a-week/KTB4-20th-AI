@@ -3,9 +3,10 @@
 # TODO: generate_content 호출 시그니처는 실제 SDK로 검증 전이라 확정 아님.
 
 import functools
+from collections.abc import Callable
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -22,15 +23,16 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=settings.gemini_api_key)
 
 
-async def generate_structured(
+async def generate_structured[T: BaseModel](
     system: str,
-    user: str | list,
-    response_schema: type[BaseModel],
-) -> BaseModel:
+    user: types.ContentListUnion,
+    response_schema: type[T],
+    is_valid: Callable[[T], bool] | None = None,
+) -> T:
     # 구조화 출력 호출. user는 텍스트 하나 또는 [텍스트, 이미지] 리스트
-    # 실패(예외 또는 parsed=None) 시 1회 재시도, 그래도 실패하면 마지막 에러를 그대로 올림
+    # is_valid: 스키마는 맞아도 내용이 요청과 어긋나는지 호출하는 쪽이 검사할 때 넘긴다
+    # 실패(예외, 스키마 불일치, is_valid 불통과) 시 1회 재시도, 그래도 실패하면 마지막 에러를 그대로 올림
 
-    contents = user if isinstance(user, list) else [user]
     config = types.GenerateContentConfig(
         system_instruction=system,
         response_mime_type="application/json",
@@ -40,12 +42,21 @@ async def generate_structured(
     for _ in range(MAX_ATTEMPTS):
         try:
             response = await _get_client().aio.models.generate_content(
-                model=MODEL_NAME, contents=contents, config=config,
+                model=MODEL_NAME, contents=user, config=config,
             )
+        except errors.APIError as e:
+            if e.code == 429:  # 할당량 초과 - 바로 재시도해도 또 막히므로 즉시 포기
+                raise
+            last_error = e
+            continue
         except Exception as e:  # noqa: BLE001 — 재시도 대상이라 SDK 예외 종류를 가리지 않고 잡음
             last_error = e
             continue
-        if response.parsed is not None:
-            return response.parsed
-        last_error = ValueError("Gemini 응답이 스키마와 맞지 않음 (parsed=None)")
+        if not isinstance(response.parsed, response_schema):
+            last_error = ValueError("Gemini 응답이 스키마와 맞지 않음")
+            continue
+        if is_valid is not None and not is_valid(response.parsed):
+            last_error = ValueError("Gemini 응답이 요청 내용과 맞지 않음")
+            continue
+        return response.parsed
     raise last_error
