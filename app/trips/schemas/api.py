@@ -1,7 +1,9 @@
+from datetime import date
 from enum import Enum
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
-from datetime import date
+
+from app.core.time import get_service_today
 from app.trips.schemas.schemas import E_Region, Member_Survey, Place
 
 
@@ -24,7 +26,7 @@ class Place_Selection_Request(BaseModel):
     @field_validator('start_date')
     @classmethod
     def validate_start_date_not_in_past(cls, start_date_value: date) -> date:
-        if start_date_value < date.today():
+        if start_date_value < get_service_today():
             raise ValueError("시작일은 오늘자 이후여야 합니다.")
         return start_date_value
 
