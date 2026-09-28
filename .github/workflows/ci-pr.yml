@@ -18,6 +18,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
+    services: # ← steps와 동일 레벨 (job 직속)
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: test_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - name: Check main PR source
         if: >-
@@ -36,7 +50,7 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version: '0.12.16'
+          version: "0.12.16"
           enable-cache: true
 
       - name: Install Python
@@ -45,6 +59,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --python 3.12
 
+      - name: Load DB dump
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -ptest_password test_db < tests/fixtures/dump.sql
+
       - name: Lint
         run: uv run --no-sync ruff check .
 
@@ -52,6 +70,13 @@ jobs:
         run: uv run --no-sync python -m compileall -q app
 
       - name: Test
+        env:
+          INTERNAL_SERVICE_TOKEN: ${{ vars.INTERNAL_SERVICE_TOKEN }}
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_USER: root
+          DB_PASSWORD: test_password
+          DB_NAME: test_db
         run: uv run --no-sync pytest
 
       - name: Build Docker image

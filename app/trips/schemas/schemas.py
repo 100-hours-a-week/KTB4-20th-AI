@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Annotated
 
 from pydantic import BaseModel, Field
 
@@ -198,5 +199,5 @@ class Place(GooglePlaceData):
 class Member_Survey(BaseModel):
     """구성원별 설문 응답 + 회피조건 + 필수방문지."""
     user: User
-    survey_result: list[int] = Field(min_length=15, max_length=15)
+    survey_result: list[Annotated[int, Field(strict=True, ge=1, le=5)]] = Field(min_length=15, max_length=15)
     deal_breakers: list[E_Breaker] = Field(default_factory=list)

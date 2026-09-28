@@ -12,8 +12,10 @@ from app.photomissions import gemini_client, pipeline_generate, pipeline_verify
 from app.photomissions.schemas import (
     Coordinates,
     DisplayName,
+    MissionBatch,
     MissionDescription,
     MissionPlace,
+    PhotoMissionGenerateRequest,
     VerifyRequest,
     VlmResult,
 )
@@ -53,12 +55,12 @@ async def _score():
 
 
 async def _describe():
-    return await pipeline_generate.write_description(PLACE)
+    return await pipeline_generate.write_descriptions([PLACE])
 
 
 CALLERS = [
     pytest.param(pipeline_verify, _score, id="score_photo"),
-    pytest.param(pipeline_generate, _describe, id="write_description"),
+    pytest.param(pipeline_generate, _describe, id="write_descriptions"),
 ]
 
 
@@ -100,10 +102,20 @@ async def test_score_photo_returns_vlm_result(monkeypatch):
     assert await _score() == VLM_RESULT
 
 
-async def test_write_description_returns_result(monkeypatch):
-    result = MissionDescription(description="첨성대 정면이 보이게 찍기", scope="GROUP")
+async def test_write_descriptions_returns_result(monkeypatch):
+    result = MissionBatch(missions=[
+        MissionDescription(number=1, description="첨성대 정면이 보이게 찍기", scope="GROUP"),
+    ])
     monkeypatch.setattr(pipeline_generate, "generate_structured", _returning(result))
     assert await _describe() == result
+
+
+async def test_write_descriptions_invalid_after_retry_maps_to_502(monkeypatch):
+    # 재시도 후에도 장소와 짝지을 수 없으면 generate_structured가 ValueError를 올린다
+    monkeypatch.setattr(pipeline_generate, "generate_structured", _raising(ValueError("fake")))
+    with pytest.raises(HTTPException) as exc:
+        await _describe()
+    assert exc.value.status_code == 502
 
 
 # 2. fetch_image — 실제 네트워크 대신 MockTransport가 응답한다
@@ -214,6 +226,27 @@ async def test_schema_mismatch_is_retried(fake_gemini):
     assert fake.calls == 2
 
 
+async def test_invalid_content_is_retried(fake_gemini):
+    fake = fake_gemini(VLM_RESULT, VLM_RESULT)
+    checked = iter([False, True])  # 첫 응답은 검사 불통과, 두 번째는 통과
+    result = await gemini_client.generate_structured(
+        system="system", user="user", response_schema=VlmResult,
+        is_valid=lambda _: next(checked),
+    )
+    assert result == VLM_RESULT
+    assert fake.calls == 2
+
+
+async def test_invalid_content_gives_up_with_value_error(fake_gemini):
+    fake = fake_gemini(VLM_RESULT, VLM_RESULT)
+    with pytest.raises(ValueError):
+        await gemini_client.generate_structured(
+            system="system", user="user", response_schema=VlmResult,
+            is_valid=lambda _: False,
+        )
+    assert fake.calls == gemini_client.MAX_ATTEMPTS
+
+
 async def test_gives_up_after_max_attempts(fake_gemini):
     fake = fake_gemini(_api_error(500), _api_error(503))
     with pytest.raises(errors.APIError) as exc:
@@ -286,3 +319,58 @@ async def test_missing_photo_coordinates_goes_to_vlm(fake_verify_steps):
     res = await pipeline_verify.verify_photo(_verify_request(None))
     assert res.reason is None
     assert fake_verify_steps == {"fetch_image": 1, "score_photo": 1}
+
+
+# 5. generate_missions — 장소 전부를 한 번에 부르고, 번호로 장소와 짝짓는지
+
+def _place(place_id: str, name: str) -> MissionPlace:
+    return MissionPlace(
+        id=place_id,
+        displayName=DisplayName(text=name, languageCode="ko"),
+        selected_for=[],
+        matched_preferences=[],
+    )
+
+
+async def test_generate_missions_one_call_matched_by_number(monkeypatch):
+    places = [_place("places/A", "첨성대"), _place("places/B", "대릉원"), _place("places/C", "월정교")]
+    calls = []
+
+    async def fake_generate(**kwargs):
+        calls.append(kwargs)
+        # 모델이 순서를 섞어서 돌려준 경우
+        return MissionBatch(missions=[
+            MissionDescription(number=3, description="월정교 미션", scope="GROUP"),
+            MissionDescription(number=1, description="첨성대 미션", scope="PERSONAL"),
+            MissionDescription(number=2, description="대릉원 미션", scope="GROUP"),
+        ])
+
+    monkeypatch.setattr(pipeline_generate, "generate_structured", fake_generate)
+    request = PhotoMissionGenerateRequest(itinerary_id="it_1", places=places)
+    res = await pipeline_generate.generate_missions(request)
+
+    assert len(calls) == 1
+    assert [(m.place_id, m.description) for m in res.missions] == [
+        ("places/A", "첨성대 미션"),
+        ("places/B", "대릉원 미션"),
+        ("places/C", "월정교 미션"),
+    ]
+
+
+async def test_generate_missions_retries_when_place_missing(fake_gemini):
+    # 실제 generate_structured를 거쳐, 장소가 빠진 응답이면 다시 부르는지 확인한다
+    places = [_place("places/A", "첨성대"), _place("places/B", "대릉원")]
+    missing = MissionBatch(missions=[
+        MissionDescription(number=1, description="첨성대 미션", scope="GROUP"),
+    ])
+    complete = MissionBatch(missions=[
+        MissionDescription(number=1, description="첨성대 미션", scope="GROUP"),
+        MissionDescription(number=2, description="대릉원 미션", scope="GROUP"),
+    ])
+    fake = fake_gemini(missing, complete)
+    request = PhotoMissionGenerateRequest(itinerary_id="it_1", places=places)
+
+    res = await pipeline_generate.generate_missions(request)
+
+    assert fake.calls == 2
+    assert [m.place_id for m in res.missions] == ["places/A", "places/B"]

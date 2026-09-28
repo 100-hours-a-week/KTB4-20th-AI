@@ -60,11 +60,11 @@ def allocate_slots_for_single_day(preferences: dict[E_Preference, float]) -> dic
     return result
 
 def allocate_slots(
-        start_date: str, end_date: str, preferences: dict[E_Preference, float]
+        start_date: date, end_date: date, preferences: dict[E_Preference, float]
 ) -> dict[E_Preference, int]:
     """여행 기간에 따라 하루 전용/다일 계산을 선택"""
-    start = date.fromisoformat(start_date)
-    end = date.fromisoformat(end_date)
+    start = start_date
+    end = end_date
     total_days = (end - start).days + 1
 
     if total_days == 1:
