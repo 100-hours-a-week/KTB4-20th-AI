@@ -18,12 +18,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
-    services: # ← steps와 동일 레벨 (job 직속)
+    services:
       mysql:
         image: mysql:8.0
         env:
-          MYSQL_ROOT_PASSWORD: test_password
           MYSQL_DATABASE: test_db
+          MYSQL_USER: planit_ci
+          MYSQL_PASSWORD: ${{ secrets.CI_AI_MYSQL_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.CI_AI_MYSQL_ROOT_PASSWORD }}
         ports:
           - 3306:3306
         options: >-
@@ -60,8 +62,10 @@ jobs:
         run: uv sync --locked --python 3.12
 
       - name: Load DB dump
+        env:
+          MYSQL_PWD: ${{ secrets.CI_AI_MYSQL_ROOT_PASSWORD }}
         run: |
-          mysql -h 127.0.0.1 -P 3306 -u root -ptest_password test_db < tests/fixtures/dump.sql
+          mysql -h 127.0.0.1 -P 3306 -u root test_db < tests/fixtures/dump.sql
 
       - name: Lint
         run: uv run --no-sync ruff check .
@@ -71,11 +75,11 @@ jobs:
 
       - name: Test
         env:
-          INTERNAL_SERVICE_TOKEN: ${{ vars.INTERNAL_SERVICE_TOKEN }}
+          INTERNAL_SERVICE_TOKEN: ${{ secrets.INTERNAL_SERVICE_TOKEN }}
           DB_HOST: 127.0.0.1
           DB_PORT: "3306"
-          DB_USER: root
-          DB_PASSWORD: test_password
+          DB_USER: planit_ci
+          DB_PASSWORD: ${{ secrets.CI_AI_MYSQL_PASSWORD }}
           DB_NAME: test_db
         run: uv run --no-sync pytest
 
