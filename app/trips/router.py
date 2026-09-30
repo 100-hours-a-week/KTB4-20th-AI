@@ -8,10 +8,8 @@ from app.trips.schemas.api import (
     Response,
 )
 from app.trips.schemas.schemas import E_Breaker
-from app.trips.services.assign_time_slot import assign_time_slots
-from app.trips.services.place_selection import select_places
-from app.trips.services.preference import calculate_group_preference
-from app.trips.services.slot_allocation import allocate_slots
+from app.trips.services.place_selection import select_places_by_slot_plan
+from app.trips.services.slot_plan import build_slot_plan
 
 router = APIRouter(
     prefix="/trips",
@@ -22,33 +20,36 @@ router = APIRouter(
 @router.post("/place-selection", response_model=Response[Place_Selection_Response_Data])
 def place_selection(request: Place_Selection_Request) -> Response[Place_Selection_Response_Data]:
     """
-    TODO: v1에서는 하루 일정 생성만 가능하므로 현재 로직이 문제가 없습니다.
-    v2, v3에서는 시작일, 종료일에 기간이 생깁니다.
-    현재는 "슬롯 배분" 함수가 카테고리 별로 몇 개의 장소가 필요한지 dict[E_Preference, float]로 알 수 있지만
-    v2, v3에서 카테고리별 장소가 렌덤하게 배치되어도 무방한지, 만약 안된다면 어떻게 배치할지 논의가 선행되어야 합니다.
-    선행된 논의를 바탕으로 슬롯 배분이 일자별로 dict[E_Preference, float]를 가진 "배열"로 변경될 수도 있기 때문입니다.
+    TODO: v1에서는 하루 일정 생성만 가능합니다.
+    v2에서 n-1박 n일 일정을 지원하려면, build_slot_plan(하루 단위)을 일자별로 반복 호출하는 것만으로는 부족합니다.
+
+    [반복 호출 시 문제]
+    1. 매일 같은 카테고리 배치: 입력(members)이 같아 R1, R2가 매일 동일하고, 3위 이하 카테고리는 배치되지 않음
+    2. 매일 같은 장소 선택: select_places_by_slot_plan이 호출마다 평점순 상위 후보를 새로 조회함
+    3. 첫날·마지막 날 구분 없음: 도착일, 출발일도 하루 전체 템플릿(오전~저녁 이후)을 사용함
+    4. 저녁 이후 슬롯 매일 생성: 문항 10 점수가 같아 조건 충족 시 매일 밤 배치됨
+
+    [추가 필요 요소]
+    1. 일자 유형별 템플릿 (도착일, 종일, 출발일의 시간대 구성)
+    2. 일자 간 카테고리 분배 규칙 (기획 결정 선행 필요)
+    3. 여행 전체 장소 중복 제거
+    4. 저녁 이후 슬롯 빈도 규칙
     """
 
-    # 1. 취향 판정 로직
-    preferences = calculate_group_preference(request.members)
-
-    # 2. 슬롯 배분 (카테고리별 필요 개수 산출)
-    slot_counts = allocate_slots(request.start_date, request.end_date, preferences)
+    # 1. 하루 슬롯 구조 결정 (시간대별 카테고리, 저녁 이후 슬롯 여부)
+    slot_plan = build_slot_plan(request.members)
 
     # 3. 회피조건 취합 (그룹 전체)
     deal_breakers: list[E_Breaker] = []
     for member in request.members:
         deal_breakers.extend(member.deal_breakers)
 
-    # 4. 최종 장소 선택 (카테고리별 딕셔너리 반환)
-    places_by_category = select_places(preferences, slot_counts, deal_breakers, request.region, request.members)
-
-    # 5. 시간대 슬롯 배정
-    slot_result = assign_time_slots(places_by_category, preferences)
+    # 3. slot plan 순서대로 장소 선택 (후보 부족 시 강등, 보충 포함)
+    places = select_places_by_slot_plan(slot_plan, deal_breakers, request.region, request.members)
 
     return Response[Place_Selection_Response_Data](
         status_code=E_Response_Status_Code.SUCCESS,
-        data=Place_Selection_Response_Data(places=slot_result),
+        data=Place_Selection_Response_Data(places=places),
     )
 
 # @router.post("/course-recommendation", response_model=Response[Course_Recommendation_Response_Data])
