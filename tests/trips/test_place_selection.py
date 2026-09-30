@@ -264,7 +264,8 @@ class TestInternalFactors:
 
     # 6. members
     @pytest.mark.parametrize("user_ids", [
-        pytest.param(["user_1", "user_2"], id="members_minimum_two"),
+        pytest.param(["user_1"], id="members_minimum_one"),
+        pytest.param(["user_1", "user_2"], id="members_two"),
         pytest.param(["user_1", "user_2", "user_3"], id="members_three"),
         pytest.param([f"user_{index}" for index in range(1, 9)], id="members_maximum_eight"),
     ])
@@ -278,7 +279,6 @@ class TestInternalFactors:
     @pytest.mark.parametrize("user_ids", [
         # 비즈니스 규칙 위반 (최소 인원)
         pytest.param([], id="members_empty"),
-        pytest.param(["user_1"], id="members_single"),
         
         # 비즈니스 규칙 위반 (최대 인원)
         pytest.param([f"user_{index}" for index in range(1, 10)], id="members_nine"),
