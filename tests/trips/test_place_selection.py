@@ -1,7 +1,13 @@
 import pytest
 
 from app.trips.schemas.schemas import E_Breaker, E_Region
-from tests.constants import TODAY, TOMORROW, VALID_MEMBERS, YESTERDAY, resolve_date_value
+from tests.constants import (
+    TODAY,
+    TOMORROW,
+    VALID_MEMBERS,
+    YESTERDAY,
+    resolve_date_value,
+)
 
 PLACE_SELECTION_URL = "/trips/place-selection"
 
