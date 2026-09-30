@@ -55,4 +55,6 @@ def test_sentry_initialized_with_safe_options(monkeypatch):
     assert options["max_request_body_size"] == "never"
     assert options["before_send"] is sentry.scrub_event
     assert options["before_breadcrumb"] is sentry.scrub_breadcrumb
-    assert options["release"] == "ktb4-ai-server@1.0.1"
+    # 버전은 pyproject.toml 한 곳에서 관리하므로 숫자를 박지 않고 그 값과 비교한다
+    assert options["release"] == f"ktb4-ai-server@{sentry._app_version()}"
+    assert sentry._app_version() != "unknown"
