@@ -313,3 +313,67 @@ class TestInternalFactors:
 class TestExternalFactors:
     pass
     
+# ---------------- 5. 조합 테스트 ----------------
+import copy
+import json
+from itertools import combinations
+from pathlib import Path
+
+from app.trips.schemas.schemas import E_Preference
+from app.trips.services.place_selection import DIRECT_EXCLUDE_MAP
+
+REPRESENTATIVE_SURVEYS_PATH = Path(__file__).resolve().parent / "data" / "representative_surveys.json"
+REPRESENTATIVE_SURVEYS = json.loads(REPRESENTATIVE_SURVEYS_PATH.read_text(encoding="utf-8"))
+
+# 회피 조건 부분집합 전체 (공집합 포함, 2^n개)
+DEAL_BREAKER_SUBSETS = [
+    list(subset)
+    for subset_size in range(len(E_Breaker) + 1)
+    for subset in combinations(E_Breaker, subset_size)
+]
+class TestCombination:
+    @pytest.mark.parametrize("region_value", [
+        pytest.param(region.value, id=region.name) for region in E_Region
+    ])
+    @pytest.mark.parametrize("deal_breakers_value", [
+        pytest.param(
+            [breaker.value for breaker in subset],
+            id="+".join(breaker.name for breaker in subset) or "NONE",
+        )
+        for subset in DEAL_BREAKER_SUBSETS
+    ])
+    @pytest.mark.parametrize("representative_survey", [
+        pytest.param(case, id=case["case_id"]) for case in REPRESENTATIVE_SURVEYS
+    ])
+    def test_combination(self, test_client, request_headers, region_value, deal_breakers_value, representative_survey):
+        # 1. 요청 body 구성 (회피 조건은 합집합으로 처리되므로 첫 번째 멤버에만 지정)
+        members_value = copy.deepcopy(representative_survey["members"])
+        members_value[0]["deal_breakers"] = deal_breakers_value
+        request_body = {
+            "region": region_value,
+            "start_date": TODAY.isoformat(),
+            "end_date": TODAY.isoformat(),
+            "members": members_value,
+        }
+
+        response = test_client.post(PLACE_SELECTION_URL, json=request_body, headers=request_headers)
+        assert response.status_code == 200, response.json()
+        places = response.json()["data"]["places"]
+
+        # 2. invariant 1: 반환 장소 수는 5 또는 6
+        assert len(places) in (5, 6), [place["matched_preferences"] for place in places]
+
+        # 3. invariant 2: 점심(2번째), 저녁(5번째)은 FOOD
+        assert E_Preference.FOOD.value in places[1]["matched_preferences"], places[1]
+        assert E_Preference.FOOD.value in places[4]["matched_preferences"], places[4]
+
+        # 4. invariant 3: 회피 조건 type을 가진 장소 없음
+        excluded_types: set[str] = set()
+        for breaker_value in deal_breakers_value:
+            excluded_types |= DIRECT_EXCLUDE_MAP.get(E_Breaker(breaker_value), set())
+        for place in places:
+            assert not excluded_types & set(place["types"]), place
+
+        # 5. invariant 4: 장소 중복 없음
+        place_ids = [place["id"] for place in places]
+        assert len(place_ids) == len(set(place_ids)), place_ids
