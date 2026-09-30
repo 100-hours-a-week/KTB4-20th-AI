@@ -21,3 +21,9 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.7",
 ]
+
+[tool.pytest.ini_options]
+addopts = '-m "not exhaustive"'
+markers = [
+    "exhaustive: 실제 수집 데이터가 필요한 전체 조합 테스트. 약 25~30분 소요. 실행: pytest -m exhaustive",
+]
