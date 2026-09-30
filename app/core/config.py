@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     db_user: str = ""
     db_password: str = ""
     db_name: str = ""
+    sentry_dsn: str = ""  # 비어 있으면 Sentry를 켜지 않음 (로컬·테스트)
+    sentry_environment: str = "local"  # local / dev / prod
+    sentry_traces_sample_rate: float = 0.0  # 성능 추적 비율. 0이면 끔
 
     @property
     def allowed_image_hosts_list(self) -> list[str]:
