@@ -1,0 +1,2678 @@
+[
+  {
+    "case_id": "HISTORY_CULTURE__NATURE_HEALING__no_evening",
+    "expected_first": "HISTORY_CULTURE",
+    "expected_second": "NATURE_HEALING",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          2,
+          1,
+          1,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "HISTORY_CULTURE__ACTIVITY_DAY__no_evening",
+    "expected_first": "HISTORY_CULTURE",
+    "expected_second": "ACTIVITY_DAY",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          2,
+          3,
+          3,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          2,
+          3,
+          3,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "HISTORY_CULTURE__CONVENIENCE_SHOPPING__no_evening",
+    "expected_first": "HISTORY_CULTURE",
+    "expected_second": "CONVENIENCE_SHOPPING",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          2,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1,
+          2,
+          2,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          3,
+          2,
+          2,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "NATURE_HEALING__HISTORY_CULTURE__no_evening",
+    "expected_first": "NATURE_HEALING",
+    "expected_second": "HISTORY_CULTURE",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          3,
+          1,
+          1,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          2,
+          1,
+          1,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "NATURE_HEALING__ACTIVITY_DAY__no_evening",
+    "expected_first": "NATURE_HEALING",
+    "expected_second": "ACTIVITY_DAY",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          1,
+          3,
+          3,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          1,
+          3,
+          3,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          1,
+          3,
+          3,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "NATURE_HEALING__CONVENIENCE_SHOPPING__no_evening",
+    "expected_first": "NATURE_HEALING",
+    "expected_second": "CONVENIENCE_SHOPPING",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          1,
+          4,
+          4,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          1,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          3,
+          1,
+          1,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          3,
+          2,
+          2,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "ACTIVITY_DAY__HISTORY_CULTURE__no_evening",
+    "expected_first": "ACTIVITY_DAY",
+    "expected_second": "HISTORY_CULTURE",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          2,
+          5,
+          5,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          3,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          2,
+          5,
+          5,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          2,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          2,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          1,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_7"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1,
+          4,
+          4,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "ACTIVITY_DAY__NATURE_HEALING__no_evening",
+    "expected_first": "ACTIVITY_DAY",
+    "expected_second": "NATURE_HEALING",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          1,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          3,
+          4,
+          4,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          3,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          1,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          2,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_7"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          3,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_8"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          2,
+          2,
+          2,
+          2,
+          4,
+          4,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "ACTIVITY_DAY__CONVENIENCE_SHOPPING__no_evening",
+    "expected_first": "ACTIVITY_DAY",
+    "expected_second": "CONVENIENCE_SHOPPING",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          1,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "CONVENIENCE_SHOPPING__HISTORY_CULTURE__no_evening",
+    "expected_first": "CONVENIENCE_SHOPPING",
+    "expected_second": "HISTORY_CULTURE",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          3,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "CONVENIENCE_SHOPPING__NATURE_HEALING__no_evening",
+    "expected_first": "CONVENIENCE_SHOPPING",
+    "expected_second": "NATURE_HEALING",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          1,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "CONVENIENCE_SHOPPING__ACTIVITY_DAY__no_evening",
+    "expected_first": "CONVENIENCE_SHOPPING",
+    "expected_second": "ACTIVITY_DAY",
+    "expected_has_evening": false,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          1,
+          3,
+          3,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          2,
+          3,
+          3,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "HISTORY_CULTURE__NATURE_HEALING__evening",
+    "expected_first": "HISTORY_CULTURE",
+    "expected_second": "NATURE_HEALING",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          5,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          5,
+          4,
+          4,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          5,
+          2,
+          2,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          5,
+          5,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "HISTORY_CULTURE__ACTIVITY_DAY__evening",
+    "expected_first": "HISTORY_CULTURE",
+    "expected_second": "ACTIVITY_DAY",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          3,
+          3,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          5,
+          3,
+          3,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          5,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "HISTORY_CULTURE__CONVENIENCE_SHOPPING__evening",
+    "expected_first": "HISTORY_CULTURE",
+    "expected_second": "CONVENIENCE_SHOPPING",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          4,
+          3,
+          3,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          3,
+          3,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          5,
+          1,
+          1,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          4,
+          5,
+          5,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_7"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          5,
+          2,
+          2,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "NATURE_HEALING__HISTORY_CULTURE__evening",
+    "expected_first": "NATURE_HEALING",
+    "expected_second": "HISTORY_CULTURE",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          4,
+          1,
+          1,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          4,
+          5,
+          5,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          5,
+          1,
+          1,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          4,
+          3,
+          3,
+          1,
+          1,
+          1
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_7"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          5,
+          4,
+          4,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_8"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          4,
+          2,
+          2,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "NATURE_HEALING__ACTIVITY_DAY__evening",
+    "expected_first": "NATURE_HEALING",
+    "expected_second": "ACTIVITY_DAY",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          5,
+          3,
+          3,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "NATURE_HEALING__CONVENIENCE_SHOPPING__evening",
+    "expected_first": "NATURE_HEALING",
+    "expected_second": "CONVENIENCE_SHOPPING",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          5,
+          2,
+          2,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "ACTIVITY_DAY__HISTORY_CULTURE__evening",
+    "expected_first": "ACTIVITY_DAY",
+    "expected_second": "HISTORY_CULTURE",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          4,
+          5,
+          5,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "ACTIVITY_DAY__NATURE_HEALING__evening",
+    "expected_first": "ACTIVITY_DAY",
+    "expected_second": "NATURE_HEALING",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          5,
+          4,
+          4,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "ACTIVITY_DAY__CONVENIENCE_SHOPPING__evening",
+    "expected_first": "ACTIVITY_DAY",
+    "expected_second": "CONVENIENCE_SHOPPING",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          4,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "CONVENIENCE_SHOPPING__HISTORY_CULTURE__evening",
+    "expected_first": "CONVENIENCE_SHOPPING",
+    "expected_second": "HISTORY_CULTURE",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          3,
+          3,
+          3,
+          2,
+          2,
+          2,
+          4,
+          5,
+          5,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          4,
+          2,
+          2,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "CONVENIENCE_SHOPPING__NATURE_HEALING__evening",
+    "expected_first": "CONVENIENCE_SHOPPING",
+    "expected_second": "NATURE_HEALING",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          3,
+          3,
+          3,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          1,
+          1,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          1,
+          1,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          5,
+          2,
+          2,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_7"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          4,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      }
+    ]
+  },
+  {
+    "case_id": "CONVENIENCE_SHOPPING__ACTIVITY_DAY__evening",
+    "expected_first": "CONVENIENCE_SHOPPING",
+    "expected_second": "ACTIVITY_DAY",
+    "expected_has_evening": true,
+    "members": [
+      {
+        "user": {
+          "user_id": "user_1"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          5,
+          5,
+          5,
+          5,
+          3,
+          3,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_2"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          1,
+          1,
+          1,
+          3,
+          3,
+          3,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_3"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          1,
+          1,
+          1,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_4"
+        },
+        "survey_result": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_5"
+        },
+        "survey_result": [
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          2,
+          2,
+          2,
+          4,
+          5,
+          5,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_6"
+        },
+        "survey_result": [
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          5,
+          4,
+          4,
+          5,
+          5,
+          5
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_7"
+        },
+        "survey_result": [
+          3,
+          3,
+          3,
+          4,
+          4,
+          4,
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      },
+      {
+        "user": {
+          "user_id": "user_8"
+        },
+        "survey_result": [
+          2,
+          2,
+          2,
+          4,
+          4,
+          4,
+          5,
+          5,
+          5,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "deal_breakers": []
+      }
+    ]
+  }
+]
