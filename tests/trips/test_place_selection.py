@@ -331,6 +331,8 @@ DEAL_BREAKER_SUBSETS = [
     for subset_size in range(len(E_Breaker) + 1)
     for subset in combinations(E_Breaker, subset_size)
 ]
+
+@pytest.mark.exhaustive
 class TestCombination:
     @pytest.mark.parametrize("region_value", [
         pytest.param(region.value, id=region.name) for region in E_Region
