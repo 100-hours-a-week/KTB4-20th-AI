@@ -78,6 +78,8 @@ def get_DB_places_by_category(
                 FROM ai_places p
                 JOIN ai_place_categories pc ON p.id = pc.place_id
                 WHERE pc.category = %s
+                    AND p.rating IS NOT NULL
+                    AND p.user_rating_count IS NOT NULL
             """
             params: list = [category.value]
 
