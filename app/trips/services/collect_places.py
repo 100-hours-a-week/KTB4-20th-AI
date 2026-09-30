@@ -1,9 +1,11 @@
 import time
+from pathlib import Path
 from typing import cast
 
 import requests
 
 from app.core.config import settings
+from app.trips.constants import HEX_GRID_POINTS, HEX_RADIUS_M
 from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference
 
 BATCH_SIZE = 20  # Nearby Search 1회 최대 결과 수
@@ -20,15 +22,6 @@ REGIONS = {
 }
 
 # 고정 반경 적용
-import json
-from pathlib import Path
-
-HEX_RADIUS_M = 2883  # 작은 원(육각형)의 반경
-
-_HEX_GRID_PATH = Path(__file__).resolve().parent.parent / "data" / "hex_grid_points.json"
-with open(_HEX_GRID_PATH, encoding="utf-8") as f:
-    HEX_GRID_POINTS: dict[str, list[list[float]]] = json.load(f)
-
 CATEGORY_TYPE_MAP: dict[E_Preference, list[E_Google_Place_Type]] = {
     E_Preference.HISTORY_CULTURE: [
         E_Google_Place_Type.MUSEUM,
@@ -282,6 +275,7 @@ def call_nearby_search(
     return response.json()
 
 # call_nearby_search_with_retry
+
 def call_nearby_search_with_retry(
     included_types: list[str],
     center: tuple[float, float],

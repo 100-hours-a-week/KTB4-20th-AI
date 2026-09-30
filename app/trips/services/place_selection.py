@@ -1,3 +1,8 @@
+from app.trips.constants import (
+    HEX_GRID_POINTS,
+    HEX_RADIUS_M,
+    REGION_TO_COLLECTION_AREAS,
+)
 from app.trips.schemas.schemas import (
     Display_Name,
     E_Breaker,
@@ -9,11 +14,6 @@ from app.trips.schemas.schemas import (
     Member_Survey,
     Place,
 )
-
-# TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
-# 이를 import하는 건 역할 혼동임. REGIONS/HEX_GRID_POINTS/HEX_RADIUS_M/
-# REGION_TO_COLLECTION_AREAS를 별도 constants.py로 분리 필요(배포 후 정리).
-from app.trips.services.collect_places import HEX_GRID_POINTS, HEX_RADIUS_M
 from app.trips.services.db import get_connection
 from app.trips.services.preference import find_matched_members
 
@@ -59,14 +59,6 @@ DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
 }
 
 # 지역
-REGION_TO_COLLECTION_AREAS: dict[E_Region, list[str]] = {
-    E_Region.SEOUL: ["서울"],
-    E_Region.BUSAN: ["부산"],
-    E_Region.JEJU: ["제주시권", "서귀포권"],  # 하나의 선택지가 두 수집 지역에 대응
-    E_Region.GYEONGJU: ["경주"],
-    E_Region.JEONJU: ["전주"],
-}
-
 def get_DB_places_by_category(
     category: E_Preference,
     preference_score: float,
