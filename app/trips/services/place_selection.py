@@ -1,6 +1,7 @@
 from app.trips.constants import (
     HEX_GRID_POINTS,
     HEX_RADIUS_M,
+    NIGHT_ACTIVITY_TYPES,
     REGION_TO_COLLECTION_AREAS,
 )
 from app.trips.schemas.schemas import (
@@ -16,6 +17,7 @@ from app.trips.schemas.schemas import (
 )
 from app.trips.services.db import get_connection
 from app.trips.services.preference import find_matched_members
+from app.trips.services.slot_plan import E_Time_Slot, Slot_Plan
 
 # DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
 RATINGS_WEIGHT = 0.6
@@ -58,7 +60,6 @@ DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
     },
 }
 
-# 지역
 def get_DB_places_by_category(
     category: E_Preference,
     preference_score: float,
@@ -190,5 +191,84 @@ def select_places(
             place.selected_for = matched_members
 
         result[category] = db_places
+
+    return result
+
+NIGHT_ACTIVITY_TYPE_VALUES: set[str] = {place_type.value for place_type in NIGHT_ACTIVITY_TYPES}
+
+# 주간 카테고리 1개에서 필요할 수 있는 최대 장소 수 (주간 슬롯 전체 수)
+DAYTIME_SLOT_COUNT = 3
+
+def _build_fallback_order(
+    short_category: E_Preference, daytime_category_ranking: tuple[E_Preference, ...]
+) -> list[E_Preference]:
+    """방식 A: 부족한 카테고리의 다음 순위부터 순차 보충. 마지막 순위 다음은 1위부터 다시 탐색."""
+    short_index = daytime_category_ranking.index(short_category)
+    return list(daytime_category_ranking[short_index + 1:]) + list(daytime_category_ranking[:short_index])
+
+
+
+def select_places_by_slot_plan(
+    preferences: dict[E_Preference, float],
+    slot_plan: Slot_Plan,
+    deal_breakers: list[E_Breaker],
+    region: E_Region,
+    members: list[Member_Survey],
+) -> list[Place]:
+    direct_excluded: set[str] = set()
+    for breaker in deal_breakers:
+        direct_excluded |= DIRECT_EXCLUDE_MAP.get(breaker, set())
+
+    # 카테고리별 후보 목록 (조회는 필요한 카테고리만, 카테고리당 1회)
+    daytime_pools: dict[E_Preference, list[Place]] = {}
+
+    def get_daytime_pool(category: E_Preference) -> list[Place]:
+        if category not in daytime_pools:
+            excluded_types = direct_excluded | NIGHT_ACTIVITY_TYPE_VALUES if category == E_Preference.ACTIVITY else direct_excluded
+            daytime_pools[category] = get_DB_places_by_category(
+                category, preferences[category], DAYTIME_SLOT_COUNT, region, excluded_types=excluded_types,
+            )
+        return daytime_pools[category]
+
+    food_slot_count = sum(1 for item in slot_plan.items if item.category == E_Preference.FOOD)
+    food_pool = get_DB_places_by_category(
+        E_Preference.FOOD, preferences[E_Preference.FOOD], food_slot_count, region, excluded_types=direct_excluded,
+    )
+
+    has_evening_slot = any(item.time_slot == E_Time_Slot.EVENING for item in slot_plan.items)
+    evening_pool = get_DB_places_by_category(
+        E_Preference.ACTIVITY, preferences[E_Preference.ACTIVITY], 1, region,
+        excluded_types=direct_excluded, required_types=NIGHT_ACTIVITY_TYPE_VALUES,
+    ) if has_evening_slot else []
+
+    matched_members_by_category: dict[E_Preference, list[str]] = {}
+
+    def assign(place: Place, category: E_Preference) -> Place:
+        if category not in matched_members_by_category:
+            matched_members_by_category[category] = find_matched_members(members, category)
+        place.matched_preferences = [category]
+        place.selected_for = matched_members_by_category[category]
+        return place
+
+    result: list[Place] = []
+    for item in slot_plan.items:
+        # 저녁 이후: 야간형 후보가 없으면 슬롯 제거 (5슬롯 강등)
+        if item.time_slot == E_Time_Slot.EVENING:
+            if evening_pool:
+                result.append(assign(evening_pool.pop(0), E_Preference.ACTIVITY))
+            continue
+
+        # 점심, 저녁: FOOD 고정, 보충 없음
+        if item.category == E_Preference.FOOD:
+            if food_pool:
+                result.append(assign(food_pool.pop(0), E_Preference.FOOD))
+            continue
+
+        # 주간: 해당 카테고리 후보가 없으면 방식 A로 다음 순위 카테고리에서 보충
+        for category in [item.category, *_build_fallback_order(item.category, slot_plan.daytime_category_ranking)]:
+            pool = get_daytime_pool(category)
+            if pool:
+                result.append(assign(pool.pop(0), category))
+                break
 
     return result

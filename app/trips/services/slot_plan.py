@@ -37,6 +37,11 @@ class Slot_Plan_Item:
     time_slot: E_Time_Slot
     category: E_Preference
 
+@dataclass(frozen=True)
+class Slot_Plan:
+    items: tuple[Slot_Plan_Item, ...]
+    daytime_category_ranking: tuple[E_Preference, ...]  # 방식 A 보충 순서 계산용 주간 후보 전체 순위
+
 
 def calculate_group_preference_for_slot(members: list[Member_Survey]) -> dict[E_Preference, float]:
     """슬롯 배치용: 카테고리별 그룹 점수. 주간형 ACTIVITY 문항(11~12번) 사용"""
@@ -66,14 +71,15 @@ def rank_daytime_categories(
 
 def build_slot_plan(
     members: list[Member_Survey], random_generator: random.Random | None = None
-) -> list[Slot_Plan_Item]:
+) -> Slot_Plan:
     """하루 슬롯 구조 결정: 주간 1위 2개, 2위 1개, FOOD 점심·저녁 고정, 조건 충족 시 저녁 이후 ACTIVITY."""
     random_generator = random_generator or random.Random()
 
     slot_preferences = calculate_group_preference_for_slot(members)
-    first_category, second_category = rank_daytime_categories(slot_preferences, random_generator)[:2]
+    daytime_category_ranking = rank_daytime_categories(slot_preferences, random_generator)
+    first_category, second_category = daytime_category_ranking[:2]
 
-    slot_plan = [
+    slot_plan_items = [
         Slot_Plan_Item(E_Time_Slot.MORNING, first_category),
         Slot_Plan_Item(E_Time_Slot.LUNCH, E_Preference.FOOD),
         Slot_Plan_Item(E_Time_Slot.AFTERNOON_FIRST, first_category),
@@ -82,6 +88,9 @@ def build_slot_plan(
     ]
 
     if calculate_night_activity_group_score(members) > EVENING_SLOT_THRESHOLD:
-        slot_plan.append(Slot_Plan_Item(E_Time_Slot.EVENING, E_Preference.ACTIVITY))
+        slot_plan_items.append(Slot_Plan_Item(E_Time_Slot.EVENING, E_Preference.ACTIVITY))
 
-    return slot_plan
+    return Slot_Plan(
+        items=tuple(slot_plan_items),
+        daytime_category_ranking=tuple(daytime_category_ranking),
+    )
