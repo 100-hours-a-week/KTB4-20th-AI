@@ -62,7 +62,6 @@ DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
 
 def get_DB_places_by_category(
     category: E_Preference,
-    preference_score: float,
     limit: int,
     region: E_Region,
     excluded_types: set[str] | None = None,
@@ -160,40 +159,6 @@ def get_DB_places_by_category(
     finally:
         conn.close()
 
-def select_places(
-    preferences: dict[E_Preference, float],
-    slot_counts: dict[E_Preference, int],
-    deal_breakers: list[E_Breaker],
-    region: E_Region,
-    members: list[Member_Survey],
-) -> dict[E_Preference, list[Place]]:
-    direct_excluded: set[str] = set()
-
-    for breaker in deal_breakers:
-        direct_excluded |= DIRECT_EXCLUDE_MAP.get(breaker, set())
-
-    result: dict[E_Preference, list[Place]] = {c: [] for c in E_Preference}
-
-    for category, count in slot_counts.items():
-        if count <= 0:
-            continue
-        db_places = get_DB_places_by_category(
-            category, preferences[category], count, region,
-            excluded_types=direct_excluded,
-        )
-
-        # 이 카테고리에서 그룹 평균보다 높은 멤버들 계산 (카테고리당 한 번만)
-        matched_members = find_matched_members(members, category)
-
-        # 각 장소에 matched_preferences, selected_for 채움
-        for place in db_places:
-            place.matched_preferences = [category]
-            place.selected_for = matched_members
-
-        result[category] = db_places
-
-    return result
-
 NIGHT_ACTIVITY_TYPE_VALUES: set[str] = {place_type.value for place_type in NIGHT_ACTIVITY_TYPES}
 
 # 주간 카테고리 1개에서 필요할 수 있는 최대 장소 수 (주간 슬롯 전체 수)
@@ -206,10 +171,7 @@ def _build_fallback_order(
     short_index = daytime_category_ranking.index(short_category)
     return list(daytime_category_ranking[short_index + 1:]) + list(daytime_category_ranking[:short_index])
 
-
-
 def select_places_by_slot_plan(
-    preferences: dict[E_Preference, float],
     slot_plan: Slot_Plan,
     deal_breakers: list[E_Breaker],
     region: E_Region,
@@ -226,18 +188,18 @@ def select_places_by_slot_plan(
         if category not in daytime_pools:
             excluded_types = direct_excluded | NIGHT_ACTIVITY_TYPE_VALUES if category == E_Preference.ACTIVITY else direct_excluded
             daytime_pools[category] = get_DB_places_by_category(
-                category, preferences[category], DAYTIME_SLOT_COUNT, region, excluded_types=excluded_types,
+                category, DAYTIME_SLOT_COUNT, region, excluded_types=excluded_types,
             )
         return daytime_pools[category]
 
     food_slot_count = sum(1 for item in slot_plan.items if item.category == E_Preference.FOOD)
     food_pool = get_DB_places_by_category(
-        E_Preference.FOOD, preferences[E_Preference.FOOD], food_slot_count, region, excluded_types=direct_excluded,
+        E_Preference.FOOD, food_slot_count, region, excluded_types=direct_excluded,
     )
 
     has_evening_slot = any(item.time_slot == E_Time_Slot.EVENING for item in slot_plan.items)
     evening_pool = get_DB_places_by_category(
-        E_Preference.ACTIVITY, preferences[E_Preference.ACTIVITY], 1, region,
+        E_Preference.ACTIVITY, 1, region,
         excluded_types=direct_excluded, required_types=NIGHT_ACTIVITY_TYPE_VALUES,
     ) if has_evening_slot else []
 
