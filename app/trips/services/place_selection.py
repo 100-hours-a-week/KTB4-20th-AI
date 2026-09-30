@@ -65,6 +65,7 @@ def get_DB_places_by_category(
     limit: int,
     region: E_Region,
     excluded_types: set[str] | None = None,
+    required_types: set[str] | None = None,
 ) -> list[Place]:
     conn = get_connection()
     try:
@@ -101,6 +102,16 @@ def get_DB_places_by_category(
                     )
                 """.format(", ".join(["%s"] * len(excluded_types)))
                 params.extend(excluded_types)
+
+            # 포함 필터: 지정한 type 중 하나 이상을 가진 장소만 조회 (예: 저녁 이후 슬롯의 야간형 ACTIVITY)
+            if required_types:
+                query += """
+                    AND p.id IN (
+                        SELECT place_id FROM ai_place_types
+                        WHERE type IN ({})
+                    )
+                """.format(", ".join(["%s"] * len(required_types)))
+                params.extend(required_types)
 
             query += f"""
                 ORDER BY (p.rating * {RATINGS_WEIGHT}

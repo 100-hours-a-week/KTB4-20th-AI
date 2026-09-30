@@ -1,5 +1,4 @@
 
-from app.trips.constants import CATEGORY_INDEX_MAP_FOR_SLOT, NIGHT_ACTIVITY_INDEX_RANGE
 from app.trips.schemas.schemas import E_Preference, Member_Survey
 from app.trips.services.group_score import (
     calculate_group_score,
@@ -48,19 +47,3 @@ def find_matched_members(members: list[Member_Survey], category: E_Preference) -
 # 취향 분석용: 카테고리별 그룹 점수.
 def calculate_group_preference(members: list[Member_Survey]) -> dict[E_Preference, float]:
     return {category: _calculate_category_score(members, category) for category in E_Preference}
-
-
-# 슬롯 배치용: 카테고리별 그룹 점수. 주간형 ACTIVITY 문항(11~12번) 사용
-def calculate_group_preference_for_slot(members: list[Member_Survey]) -> dict[E_Preference, float]:
-    return {
-        category: calculate_group_score([
-            avg for _, avg in calculate_per_member_averages(members, CATEGORY_INDEX_MAP_FOR_SLOT[category])
-        ])
-        for category in E_Preference
-    }
-
-
-## 슬롯 추가용: 야간형 ACTIVITY 문항(10번) 사용
-def calculate_night_activity_group_score(members: list[Member_Survey]) -> float:
-    per_member = calculate_per_member_averages(members, NIGHT_ACTIVITY_INDEX_RANGE)
-    return calculate_group_score([avg for _, avg in per_member])
