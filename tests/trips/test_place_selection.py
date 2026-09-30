@@ -1,7 +1,7 @@
 import pytest
 
 from app.trips.schemas.schemas import E_Breaker, E_Region
-from tests.constants import TODAY, TOMORROW, VALID_MEMBERS, YESTERDAY
+from tests.constants import TODAY, TOMORROW, VALID_MEMBERS, YESTERDAY, resolve_date_value
 
 PLACE_SELECTION_URL = "/trips/place-selection"
 
@@ -79,8 +79,8 @@ class TestPeriod:
     def make_period_request_body(self, start_date_value, end_date_value, omit_field=None):
         request_body = {
             "region": self.REGION,
-            "start_date": start_date_value,
-            "end_date": end_date_value,
+            "start_date": resolve_date_value(start_date_value),
+            "end_date": resolve_date_value(end_date_value),
             "members": VALID_MEMBERS,
         }
         if omit_field:
@@ -89,8 +89,8 @@ class TestPeriod:
 
     # 3. 성공 케이스
     @pytest.mark.parametrize("start_date_value, end_date_value", [
-        pytest.param(TODAY.isoformat(), TODAY.isoformat(), id="today_single_day"),
-        pytest.param(TOMORROW.isoformat(), TOMORROW.isoformat(), id="future_single_day"),
+        pytest.param(TODAY, TODAY, id="today_single_day"),
+        pytest.param(TOMORROW, TOMORROW, id="future_single_day"),
     ])
     def test_period_valid(self, test_client, request_headers, start_date_value, end_date_value):
         response = test_client.post(
@@ -103,21 +103,21 @@ class TestPeriod:
     # 4. 실패 케이스
     @pytest.mark.parametrize("start_date_value, end_date_value, omit_field, expected_error_field", [
         # 비즈니스 규칙 위반
-        pytest.param(YESTERDAY.isoformat(), YESTERDAY.isoformat(), None, "start_date", id="start_in_past"),
-        pytest.param(TOMORROW.isoformat(), TODAY.isoformat(), None, "end_date", id="end_before_start"),
-        
+        pytest.param(YESTERDAY, YESTERDAY, None, "start_date", id="start_in_past"),
+        pytest.param(TOMORROW, TODAY, None, "end_date", id="end_before_start"),
+
         # 구문 위반
-        pytest.param("wrong_format", TODAY.isoformat(), None, "start_date", id="start_wrong_format"),
-        pytest.param("2026/09/27", TODAY.isoformat(), None, "start_date", id="start_wrong_separator"),
-        pytest.param(TODAY.isoformat(), "2026-02-30", None, "end_date", id="end_invalid_calendar_date"),
-        
+        pytest.param("wrong_format", TODAY, None, "start_date", id="start_wrong_format"),
+        pytest.param("2026/09/27", TODAY, None, "start_date", id="start_wrong_separator"),
+        pytest.param(TODAY, "2026-02-30", None, "end_date", id="end_invalid_calendar_date"),
+
         # 타입 위반
-        pytest.param(["2026-09-27"], TODAY.isoformat(), None, "start_date", id="start_list"),
-        pytest.param({"start": "2026-09-27"}, TODAY.isoformat(), None, "start_date", id="start_dict"),
-        
+        pytest.param(["2026-09-27"], TODAY, None, "start_date", id="start_list"),
+        pytest.param({"start": "2026-09-27"}, TODAY, None, "start_date", id="start_dict"),
+
         # None / 누락
-        pytest.param(None, TODAY.isoformat(), None, "start_date", id="start_none"),
-        pytest.param(TODAY.isoformat(), TODAY.isoformat(), "end_date", "end_date", id="end_missing"),
+        pytest.param(None, TODAY, None, "start_date", id="start_none"),
+        pytest.param(TODAY, TODAY, "end_date", "end_date", id="end_missing"),
     ])
     def test_period_invalid(self, test_client, request_headers, start_date_value, end_date_value, omit_field, expected_error_field):
         response = test_client.post(
