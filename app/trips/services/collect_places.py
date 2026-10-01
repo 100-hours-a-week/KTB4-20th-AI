@@ -5,7 +5,7 @@ from typing import cast
 import requests
 
 from app.core.config import settings
-from app.trips.constants import HEX_GRID_POINTS, HEX_RADIUS_M
+from app.trips.constants import HEX_GRID_POINTS, HEX_RADIUS_M, COLLECTION_AREA_TO_REGION
 from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference
 
 BATCH_SIZE = 20  # Nearby Search 1회 최대 결과 수
@@ -155,16 +155,29 @@ def count_places() -> int:
     finally:
         conn.close()
 
-# insert_place_category, insert_place_type
+# insert_place_region, insert_place_category, insert_place_type
 from app.trips.services.db import get_connection
 
+def insert_place_region(place_row_id: int, region: str) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO ai_place_regions (place_id, region) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE id = id",
+                (place_row_id, region),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 def insert_place_category(place_row_id: int, category: str) -> None:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO ai_place_categories (place_id, category) VALUES (%s, %s)",
+                "INSERT INTO ai_place_categories (place_id, category) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE id = id",
                 (place_row_id, category),
             )
         conn.commit()
@@ -221,18 +234,16 @@ def insert_place(place_data: dict) -> int:
     finally:
         conn.close()
 
-# place_exists
-
-def place_exists(google_place_id: str) -> bool:
+def get_place_row_id(google_place_id: str) -> int | None:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT 1 FROM ai_places WHERE google_place_id = %s LIMIT 1",
+                "SELECT id FROM ai_places WHERE google_place_id = %s LIMIT 1",
                 (google_place_id,),
             )
             result = cursor.fetchone()
-        return result is not None
+        return result[0] if result is not None else None
     finally:
         conn.close()
 
@@ -315,6 +326,8 @@ def collect_places() -> None:
 
     # 1. 반복문 1: HEX_GRID_POINTS의 지역을 순회
     for region_name, points in HEX_GRID_POINTS.items():
+        region_value = COLLECTION_AREA_TO_REGION[region_name].value
+
         # 반복문 2: 지역의 세부 좌표 배열(points)를 순서대로 순회
         for i, point in enumerate(points):
             center = cast(tuple[float, float], tuple(point)) # 세부 좌표
@@ -351,14 +364,14 @@ def collect_places() -> None:
                         for place_data in response.get("places", []):
                             google_place_id = place_data["id"]
 
-                            if place_exists(google_place_id):
-                                continue
+                            place_row_id = get_place_row_id(google_place_id)
+                            if place_row_id is None:
+                                place_row_id = insert_place(place_data)
+                                for type_value in place_data.get("types", []):
+                                    insert_place_type(place_row_id, type_value)
 
-                            place_row_id = insert_place(place_data)
                             insert_place_category(place_row_id, category.value)
-
-                            for type_value in place_data.get("types", []):
-                                insert_place_type(place_row_id, type_value)
+                            insert_place_region(place_row_id, region_value)
                     except (KeyError, AttributeError, TypeError) as e:
                         consecutive_parse_failures += 1
                         print(f"응답 구조 이상({key}): {e} — 이 조합은 건너뜀")
