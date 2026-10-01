@@ -111,17 +111,23 @@ def read_photo(location: tuple[pathlib.Path, str | None]) -> bytes:
     return _open_zip(path).read(member)
 
 
-def build_cases(rows: list[dict], available: set[str], per_place: int, seed: int) -> list[dict]:
+def build_cases(
+    rows: list[dict], available: set[str], per_place: int, seed: int, all_negatives: bool = False
+) -> list[dict]:
     # 장소마다 사진 per_place장을 뽑아, 같은 장소 미션(positive)과 다른 장소 미션(negative)을 한 번씩 만든다
     # 장소별로 순서를 한 번 섞어두고 앞에서부터 가져가서, per_place를 늘려도 앞서 뽑힌 사진은 그대로 유지된다
+    # all_negatives면 나머지 장소 미션을 모두 만든다. 정답이 "실패"로 정해져 있어 사람 표시 없이 평가 건수를 늘릴 수 있다
     cases = []
     for place in LANDMARKS:
         pool = sorted((r for r in rows if r["place"] == place and r["photo"] in available), key=lambda r: r["photo"])
         random.Random(f"{seed}-{place}").shuffle(pool)
         for r in pool[:per_place]:
-            other = random.Random(f"{seed}-{r['photo']}").choice([p for p in LANDMARKS if p != place])
-            for kind, target in (("positive", place), ("negative", other)):
-                cases.append({**r, "kind": kind, "target": target})
+            others = [p for p in LANDMARKS if p != place]
+            if not all_negatives:
+                others = [random.Random(f"{seed}-{r['photo']}").choice(others)]
+            cases.append({**r, "kind": "positive", "target": place})
+            for other in others:
+                cases.append({**r, "kind": "negative", "target": other})
     return cases
 
 
@@ -264,6 +270,7 @@ async def main() -> None:
     ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="로컬 모델을 부를 OpenAI 호환 서버 주소")
     ap.add_argument("--same-as", type=pathlib.Path, help="이 결과 파일에서 성공한 건과 같은 사진·미션만 호출")
     ap.add_argument("--lookalike-only", action="store_true", help="월정교↔동궁과월지 오답 미션만 호출")
+    ap.add_argument("--all-negatives", action="store_true", help="사진마다 나머지 장소 미션을 모두 만든다 (기본은 1개)")
     args = ap.parse_args()
     if args.same_as and args.same_as.resolve() == args.out.resolve():
         ap.error("--same-as와 --out은 다른 파일이어야 함")
@@ -273,7 +280,7 @@ async def main() -> None:
 
     rows = load_mapping(args.mapping)
     index = index_photos(args.photos)
-    cases = build_cases(rows, set(index), args.per_place, args.seed)
+    cases = build_cases(rows, set(index), args.per_place, args.seed, args.all_negatives)
     if args.lookalike_only:
         cases = [c for c in cases if is_lookalike(c)]
     if args.same_as:
