@@ -2,7 +2,7 @@
 CREATE TABLE ai_places (
     -- 기존 컬럼 10개
     id INT AUTO_INCREMENT PRIMARY KEY,
-    google_place_id VARCHAR(100) UNIQUE NOT NULL,
+    google_place_id VARCHAR(255) COLLATE utf8mb4_bin UNIQUE NOT NULL,
     name VARCHAR(200),
     rating FLOAT,
     user_rating_count INT,
