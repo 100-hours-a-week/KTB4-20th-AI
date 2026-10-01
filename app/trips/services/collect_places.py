@@ -5,7 +5,7 @@ from typing import cast
 import requests
 
 from app.core.config import settings
-from app.trips.constants import HEX_GRID_POINTS, HEX_RADIUS_M
+from app.trips.constants import COLLECTION_AREA_TO_REGION, HEX_GRID_POINTS, HEX_RADIUS_M
 from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference
 
 BATCH_SIZE = 20  # Nearby Search 1회 최대 결과 수
@@ -155,16 +155,30 @@ def count_places() -> int:
     finally:
         conn.close()
 
-# insert_place_category, insert_place_type
+# insert_place_region, insert_place_category, insert_place_type
 from app.trips.services.db import get_connection
 
+
+def insert_place_region(place_row_id: int, region: str) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO ai_place_regions (place_id, region) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE id = id",
+                (place_row_id, region),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 def insert_place_category(place_row_id: int, category: str) -> None:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "INSERT INTO ai_place_categories (place_id, category) VALUES (%s, %s)",
+                "INSERT INTO ai_place_categories (place_id, category) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE id = id",
                 (place_row_id, category),
             )
         conn.commit()
@@ -185,35 +199,128 @@ def insert_place_type(place_row_id: int, type_value: str) -> None:
         conn.close()
 
 # insert_place
-from datetime import UTC, datetime
+import json
+import re
+from datetime import UTC, date, datetime
+
+# 컬럼명이 응답 key를 snake_case로 바꾼 것과 같은 scalar field 41개
+SCALAR_FIELD_NAMES = [
+    "rating", "userRatingCount",
+    "adrFormatAddress", "businessStatus", "formattedAddress", "shortFormattedAddress",
+    "googleMapsUri", "iconBackgroundColor", "iconMaskBaseUri", "movedPlace", "movedPlaceId",
+    "primaryType", "pureServiceAreaBusiness", "utcOffsetMinutes",
+    "internationalPhoneNumber", "nationalPhoneNumber", "priceLevel", "websiteUri",
+    "allowsDogs", "curbsidePickup", "delivery", "dineIn", "goodForChildren", "goodForGroups",
+    "goodForWatchingSports", "liveMusic", "menuForChildren", "outdoorSeating", "reservable",
+    "restroom", "servesBeer", "servesBreakfast", "servesBrunch", "servesCocktails",
+    "servesCoffee", "servesDessert", "servesDinner", "servesLunch", "servesVegetarianFood",
+    "servesWine", "takeout",
+]
+
+# 구조 그대로 JSON 컬럼에 저장하는 field 21개
+JSON_FIELD_NAMES = [
+    "addressComponents", "addressDescriptor", "attributions", "consumerAlert",
+    "containingPlaces", "subDestinations", "postalAddress", "entrances",
+    "navigationPoints", "transitStation", "priceRange", "regularOpeningHours",
+    "currentOpeningHours", "regularSecondaryOpeningHours", "currentSecondaryOpeningHours",
+    "generativeSummary", "reviewSummary", "neighborhoodSummary",
+    "evChargeAmenitySummary", "evChargeOptions", "fuelOptions",
+]
+
+# 컬럼명 → 응답 내 key 경로 (객체에서 값을 꺼내 펼치는 컬럼 33개)
+NESTED_COLUMN_PATHS: dict[str, tuple[str, ...]] = {
+    "name": ("displayName", "text"),
+    "editorial_summary": ("editorialSummary", "text"),
+    "latitude": ("location", "latitude"),
+    "longitude": ("location", "longitude"),
+    "primary_type_display_name": ("primaryTypeDisplayName", "text"),
+    "google_maps_type_label": ("googleMapsTypeLabel", "text"),
+    "wheelchair_accessible_parking": ("accessibilityOptions", "wheelchairAccessibleParking"),
+    "wheelchair_accessible_entrance": ("accessibilityOptions", "wheelchairAccessibleEntrance"),
+    "wheelchair_accessible_restroom": ("accessibilityOptions", "wheelchairAccessibleRestroom"),
+    "wheelchair_accessible_seating": ("accessibilityOptions", "wheelchairAccessibleSeating"),
+    "parking_free_lot": ("parkingOptions", "freeParkingLot"),
+    "parking_paid_lot": ("parkingOptions", "paidParkingLot"),
+    "parking_free_street": ("parkingOptions", "freeStreetParking"),
+    "parking_paid_street": ("parkingOptions", "paidStreetParking"),
+    "parking_valet": ("parkingOptions", "valetParking"),
+    "parking_free_garage": ("parkingOptions", "freeGarageParking"),
+    "parking_paid_garage": ("parkingOptions", "paidGarageParking"),
+    "payment_accepts_credit_cards": ("paymentOptions", "acceptsCreditCards"),
+    "payment_accepts_debit_cards": ("paymentOptions", "acceptsDebitCards"),
+    "payment_accepts_cash_only": ("paymentOptions", "acceptsCashOnly"),
+    "payment_accepts_nfc": ("paymentOptions", "acceptsNfc"),
+    "plus_code_global": ("plusCode", "globalCode"),
+    "plus_code_compound": ("plusCode", "compoundCode"),
+    "time_zone_id": ("timeZone", "id"),
+    "google_maps_directions_uri": ("googleMapsLinks", "directionsUri"),
+    "google_maps_place_uri": ("googleMapsLinks", "placeUri"),
+    "google_maps_write_review_uri": ("googleMapsLinks", "writeAReviewUri"),
+    "google_maps_reviews_uri": ("googleMapsLinks", "reviewsUri"),
+    "google_maps_photos_uri": ("googleMapsLinks", "photosUri"),
+    "viewport_low_latitude": ("viewport", "low", "latitude"),
+    "viewport_low_longitude": ("viewport", "low", "longitude"),
+    "viewport_high_latitude": ("viewport", "high", "latitude"),
+    "viewport_high_longitude": ("viewport", "high", "longitude"),
+}
+
+
+def convert_to_snake_case(camel_case_name: str) -> str:
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", camel_case_name).lower()
+
+
+def get_nested_value(data: dict, *key_path: str):
+    current_value = data
+    for key in key_path:
+        if not isinstance(current_value, dict):
+            return None
+        current_value = current_value.get(key)
+    return current_value
+
+
+def build_opening_date(opening_date_data: dict | None) -> date | None:
+    if not opening_date_data:
+        return None
+    try:
+        return date(
+            opening_date_data["year"], opening_date_data["month"], opening_date_data["day"]
+        )
+    except (KeyError, ValueError):
+        return None
+
+
+def build_place_row(place_data: dict) -> dict:
+    now = datetime.now(UTC)
+    place_row = {
+        "google_place_id": place_data["id"],
+        "resource_name": place_data.get("name"),
+        "created_at": now,
+        "updated_at": now,
+        "opening_date": build_opening_date(place_data.get("openingDate")),
+    }
+    for field_name in SCALAR_FIELD_NAMES:
+        place_row[convert_to_snake_case(field_name)] = place_data.get(field_name)
+    for column_name, key_path in NESTED_COLUMN_PATHS.items():
+        place_row[column_name] = get_nested_value(place_data, *key_path)
+    for field_name in JSON_FIELD_NAMES:
+        field_value = place_data.get(field_name)
+        place_row[convert_to_snake_case(field_name)] = (
+            json.dumps(field_value, ensure_ascii=False) if field_value is not None else None
+        )
+    return place_row
 
 
 def insert_place(place_data: dict) -> int:
-    now = datetime.now(UTC)
+    place_row = build_place_row(place_data)
+    column_names = ", ".join(place_row.keys())
+    placeholders = ", ".join(["%s"] * len(place_row))
 
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                """
-                INSERT INTO ai_places (
-                    google_place_id, name, rating, user_rating_count,
-                    editorial_summary, latitude, longitude,
-                    created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    place_data["id"],
-                    place_data.get("displayName", {}).get("text"),
-                    place_data.get("rating"),
-                    place_data.get("userRatingCount"),
-                    place_data.get("editorialSummary", {}).get("text")
-                        if place_data.get("editorialSummary") else None,
-                    place_data.get("location", {}).get("latitude"),
-                    place_data.get("location", {}).get("longitude"),
-                    now,
-                    now,
-                ),
+                f"INSERT INTO ai_places ({column_names}) VALUES ({placeholders})",
+                tuple(place_row.values()),
             )
             new_id = cursor.lastrowid
         conn.commit()
@@ -221,28 +328,56 @@ def insert_place(place_data: dict) -> int:
     finally:
         conn.close()
 
-# place_exists
+def insert_place_reviews(place_row_id: int, review_list: list[dict]) -> None:
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            for review in review_list:
+                publish_time = review.get("publishTime")
+                cursor.execute(
+                    """
+                    INSERT INTO ai_place_reviews (
+                        place_id, review_name, relative_publish_time_description, rating,
+                        review_text, original_text, author_display_name, author_uri,
+                        author_photo_uri, publish_time, flag_content_uri, google_maps_uri
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        place_row_id,
+                        review.get("name"),
+                        review.get("relativePublishTimeDescription"),
+                        review.get("rating"),
+                        get_nested_value(review, "text", "text"),
+                        get_nested_value(review, "originalText", "text"),
+                        get_nested_value(review, "authorAttribution", "displayName"),
+                        get_nested_value(review, "authorAttribution", "uri"),
+                        get_nested_value(review, "authorAttribution", "photoUri"),
+                        datetime.fromisoformat(publish_time) if publish_time else None,
+                        review.get("flagContentUri"),
+                        review.get("googleMapsUri"),
+                    ),
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
-def place_exists(google_place_id: str) -> bool:
+def get_place_row_id(google_place_id: str) -> int | None:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
             cursor.execute(
-                "SELECT 1 FROM ai_places WHERE google_place_id = %s LIMIT 1",
+                "SELECT id FROM ai_places WHERE google_place_id = %s LIMIT 1",
                 (google_place_id,),
             )
             result = cursor.fetchone()
-        return result is not None
+        return result[0] if result is not None else None
     finally:
         conn.close()
 
 # call_nearby_search
 NEARBY_SEARCH_URL = "https://places.googleapis.com/v1/places:searchNearby"
 
-FIELD_MASK = (
-    "places.id,places.displayName,places.location,"
-    "places.types,places.rating,places.userRatingCount,places.editorialSummary"
-)
+FIELD_MASK = "*"
 
 
 def call_nearby_search(
@@ -256,6 +391,7 @@ def call_nearby_search(
     body = {
         "includedTypes": included_types,
         "maxResultCount": max_result_count,
+        "languageCode": "ko",
         "locationRestriction": {
             "circle": {
                 "center": {"latitude": latitude, "longitude": longitude},
@@ -311,10 +447,13 @@ def collect_places() -> None:
     completed = load_completed() # 지금까지 완료된 장소
     total_calls = 0 # 전체 호출 횟수
     consecutive_parse_failures = 0
+    consecutive_call_failures = 0
     MAX_CONSECUTIVE_FAILURES = 5  # 연속 5번 이상하면 진짜 문제로 판단
 
     # 1. 반복문 1: HEX_GRID_POINTS의 지역을 순회
     for region_name, points in HEX_GRID_POINTS.items():
+        region_value = COLLECTION_AREA_TO_REGION[region_name].value
+
         # 반복문 2: 지역의 세부 좌표 배열(points)를 순서대로 순회
         for i, point in enumerate(points):
             center = cast(tuple[float, float], tuple(point)) # 세부 좌표
@@ -341,6 +480,15 @@ def collect_places() -> None:
                 total_calls += 1
                 time.sleep(SLEEP_SECONDS)
 
+                if response is None:
+                    consecutive_call_failures += 1
+                    print(f"호출 실패, 완료 기록 안 함: {key} ({consecutive_call_failures}/{MAX_CONSECUTIVE_FAILURES})")
+                    if consecutive_call_failures >= MAX_CONSECUTIVE_FAILURES:
+                        print("연속 호출 실패, 수집을 중단합니다. 키, 권한, 네트워크를 확인하세요.")
+                        return
+                    continue
+                consecutive_call_failures = 0
+
                 if response is not None:
                     try:
                         # 4. 응답으로 받은 장소들마다:
@@ -351,14 +499,15 @@ def collect_places() -> None:
                         for place_data in response.get("places", []):
                             google_place_id = place_data["id"]
 
-                            if place_exists(google_place_id):
-                                continue
+                            place_row_id = get_place_row_id(google_place_id)
+                            if place_row_id is None:
+                                place_row_id = insert_place(place_data)
+                                for type_value in place_data.get("types", []):
+                                    insert_place_type(place_row_id, type_value)
+                                insert_place_reviews(place_row_id, place_data.get("reviews", []))
 
-                            place_row_id = insert_place(place_data)
                             insert_place_category(place_row_id, category.value)
-
-                            for type_value in place_data.get("types", []):
-                                insert_place_type(place_row_id, type_value)
+                            insert_place_region(place_row_id, region_value)
                     except (KeyError, AttributeError, TypeError) as e:
                         consecutive_parse_failures += 1
                         print(f"응답 구조 이상({key}): {e} — 이 조합은 건너뜀")
@@ -368,8 +517,10 @@ def collect_places() -> None:
                             print("연속으로 응답 구조 이상 발생 — API 스펙이 바뀌었을 가능성, 수집을 중단합니다.")
                             print(f"마지막 응답 원본: {response}")
                             return  # 진짜 여기서 전체 종료
+                        
+                        continue # mark_completed(key)를 건너뛰고 다음 category로 이동
 
-                mark_completed(key) # 성공했든, None으로 실패했든 이 조합은 "시도 완료"를 기록
+                    mark_completed(key)  # 성공한 조합만 완료로 기록 (실패 조합은 위의 continue로 건너뜀)
 
         print(f"{region_name} 완료 (누적 호출: {total_calls}회)")
 
