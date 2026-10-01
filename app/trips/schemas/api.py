@@ -21,7 +21,7 @@ class Place_Selection_Request(BaseModel):
     region: E_Region
     start_date: date
     end_date: date
-    members: list[Member_Survey] = Field(min_length=2, max_length=8)
+    members: list[Member_Survey] = Field(min_length=1, max_length=8)
 
     @field_validator('start_date')
     @classmethod

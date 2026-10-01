@@ -1,3 +1,9 @@
+from app.trips.constants import (
+    HEX_GRID_POINTS,
+    HEX_RADIUS_M,
+    NIGHT_ACTIVITY_TYPES,
+    REGION_TO_COLLECTION_AREAS,
+)
 from app.trips.schemas.schemas import (
     Display_Name,
     E_Breaker,
@@ -9,13 +15,9 @@ from app.trips.schemas.schemas import (
     Member_Survey,
     Place,
 )
-
-# TODO: collect_places.py는 배치 스크립트용 파일이라, 실시간 서비스 로직이
-# 이를 import하는 건 역할 혼동임. REGIONS/HEX_GRID_POINTS/HEX_RADIUS_M/
-# REGION_TO_COLLECTION_AREAS를 별도 constants.py로 분리 필요(배포 후 정리).
-from app.trips.services.collect_places import HEX_GRID_POINTS, HEX_RADIUS_M
 from app.trips.services.db import get_connection
 from app.trips.services.preference import find_matched_members
+from app.trips.services.slot_plan import E_Time_Slot, Slot_Plan
 
 # DB 조회 기준 가중치 (RATINGS_WEIGHT는 ratings 가중치, USER_RATING_COUNT_WEIGHT는 userRatingCount 가중치
 RATINGS_WEIGHT = 0.6
@@ -58,21 +60,12 @@ DIRECT_EXCLUDE_MAP: dict[E_Breaker, set[str]] = {
     },
 }
 
-# 지역
-REGION_TO_COLLECTION_AREAS: dict[E_Region, list[str]] = {
-    E_Region.SEOUL: ["서울"],
-    E_Region.BUSAN: ["부산"],
-    E_Region.JEJU: ["제주시권", "서귀포권"],  # 하나의 선택지가 두 수집 지역에 대응
-    E_Region.GYEONGJU: ["경주"],
-    E_Region.JEONJU: ["전주"],
-}
-
 def get_DB_places_by_category(
     category: E_Preference,
-    preference_score: float,
     limit: int,
     region: E_Region,
     excluded_types: set[str] | None = None,
+    required_types: set[str] | None = None,
 ) -> list[Place]:
     conn = get_connection()
     try:
@@ -85,6 +78,8 @@ def get_DB_places_by_category(
                 FROM ai_places p
                 JOIN ai_place_categories pc ON p.id = pc.place_id
                 WHERE pc.category = %s
+                    AND p.rating IS NOT NULL
+                    AND p.user_rating_count IS NOT NULL
             """
             params: list = [category.value]
 
@@ -109,6 +104,16 @@ def get_DB_places_by_category(
                     )
                 """.format(", ".join(["%s"] * len(excluded_types)))
                 params.extend(excluded_types)
+
+            # 포함 필터: 지정한 type 중 하나 이상을 가진 장소만 조회 (예: 저녁 이후 슬롯의 야간형 ACTIVITY)
+            if required_types:
+                query += """
+                    AND p.id IN (
+                        SELECT place_id FROM ai_place_types
+                        WHERE type IN ({})
+                    )
+                """.format(", ".join(["%s"] * len(required_types)))
+                params.extend(required_types)
 
             query += f"""
                 ORDER BY (p.rating * {RATINGS_WEIGHT}
@@ -156,36 +161,78 @@ def get_DB_places_by_category(
     finally:
         conn.close()
 
-def select_places(
-    preferences: dict[E_Preference, float],
-    slot_counts: dict[E_Preference, int],
+NIGHT_ACTIVITY_TYPE_VALUES: set[str] = {place_type.value for place_type in NIGHT_ACTIVITY_TYPES}
+
+# 주간 카테고리 1개에서 필요할 수 있는 최대 장소 수 (주간 슬롯 전체 수)
+DAYTIME_SLOT_COUNT = 3
+
+def _build_fallback_order(
+    short_category: E_Preference, daytime_category_ranking: tuple[E_Preference, ...]
+) -> list[E_Preference]:
+    """방식 A: 부족한 카테고리의 다음 순위부터 순차 보충. 마지막 순위 다음은 1위부터 다시 탐색."""
+    short_index = daytime_category_ranking.index(short_category)
+    return list(daytime_category_ranking[short_index + 1:]) + list(daytime_category_ranking[:short_index])
+
+def select_places_by_slot_plan(
+    slot_plan: Slot_Plan,
     deal_breakers: list[E_Breaker],
     region: E_Region,
     members: list[Member_Survey],
-) -> dict[E_Preference, list[Place]]:
+) -> list[Place]:
     direct_excluded: set[str] = set()
-
     for breaker in deal_breakers:
         direct_excluded |= DIRECT_EXCLUDE_MAP.get(breaker, set())
 
-    result: dict[E_Preference, list[Place]] = {c: [] for c in E_Preference}
+    # 카테고리별 후보 목록 (조회는 필요한 카테고리만, 카테고리당 1회)
+    daytime_pools: dict[E_Preference, list[Place]] = {}
 
-    for category, count in slot_counts.items():
-        if count <= 0:
+    def get_daytime_pool(category: E_Preference) -> list[Place]:
+        if category not in daytime_pools:
+            excluded_types = direct_excluded | NIGHT_ACTIVITY_TYPE_VALUES if category == E_Preference.ACTIVITY else direct_excluded
+            daytime_pools[category] = get_DB_places_by_category(
+                category, DAYTIME_SLOT_COUNT, region, excluded_types=excluded_types,
+            )
+        return daytime_pools[category]
+
+    food_slot_count = sum(1 for item in slot_plan.items if item.category == E_Preference.FOOD)
+    food_pool = get_DB_places_by_category(
+        E_Preference.FOOD, food_slot_count, region, excluded_types=direct_excluded,
+    )
+
+    has_evening_slot = any(item.time_slot == E_Time_Slot.EVENING for item in slot_plan.items)
+    evening_pool = get_DB_places_by_category(
+        E_Preference.ACTIVITY, 1, region,
+        excluded_types=direct_excluded, required_types=NIGHT_ACTIVITY_TYPE_VALUES,
+    ) if has_evening_slot else []
+
+    matched_members_by_category: dict[E_Preference, list[str]] = {}
+
+    def assign(place: Place, category: E_Preference) -> Place:
+        if category not in matched_members_by_category:
+            matched_members_by_category[category] = find_matched_members(members, category)
+        place.matched_preferences = [category]
+        place.selected_for = matched_members_by_category[category]
+        return place
+
+    result: list[Place] = []
+    for item in slot_plan.items:
+        # 저녁 이후: 야간형 후보가 없으면 슬롯 제거 (5슬롯 강등)
+        if item.time_slot == E_Time_Slot.EVENING:
+            if evening_pool:
+                result.append(assign(evening_pool.pop(0), E_Preference.ACTIVITY))
             continue
-        db_places = get_DB_places_by_category(
-            category, preferences[category], count, region,
-            excluded_types=direct_excluded,
-        )
 
-        # 이 카테고리에서 그룹 평균보다 높은 멤버들 계산 (카테고리당 한 번만)
-        matched_members = find_matched_members(members, category)
+        # 점심, 저녁: FOOD 고정, 보충 없음
+        if item.category == E_Preference.FOOD:
+            if food_pool:
+                result.append(assign(food_pool.pop(0), E_Preference.FOOD))
+            continue
 
-        # 각 장소에 matched_preferences, selected_for 채움
-        for place in db_places:
-            place.matched_preferences = [category]
-            place.selected_for = matched_members
-
-        result[category] = db_places
+        # 주간: 해당 카테고리 후보가 없으면 방식 A로 다음 순위 카테고리에서 보충
+        for category in [item.category, *_build_fallback_order(item.category, slot_plan.daytime_category_ranking)]:
+            pool = get_daytime_pool(category)
+            if pool:
+                result.append(assign(pool.pop(0), category))
+                break
 
     return result
