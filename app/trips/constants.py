@@ -20,6 +20,13 @@ REGION_TO_COLLECTION_AREAS: dict[E_Region, list[str]] = {
     E_Region.JEONJU: ["전주"],
 }
 
+# 수집 지역명 → 요청 지역 매핑 (REGION_TO_COLLECTION_AREAS의 역방향)
+COLLECTION_AREA_TO_REGION: dict[str, E_Region] = {
+    collection_area: region
+    for region, collection_areas in REGION_TO_COLLECTION_AREAS.items()
+    for collection_area in collection_areas
+}
+
 # 카테고리별 문항 인덱스 매핑 (survey_result의 위치 기반 접근에 사용)
 CATEGORY_INDEX_MAP_FOR_SLOT: dict[E_Preference, tuple[int, int]] = {
     E_Preference.HISTORY_CULTURE: (0, 3),
