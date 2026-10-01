@@ -18,6 +18,7 @@ CREATE TABLE ai_place_categories (
     place_id INT NOT NULL,
     category VARCHAR(30) NOT NULL,
     FOREIGN KEY (place_id) REFERENCES ai_places(id),
+    UNIQUE KEY uq_place_category (place_id, category),
     INDEX idx_category (category)
 );
 
@@ -27,4 +28,14 @@ CREATE TABLE ai_place_types (
     place_id INT NOT NULL,
     type VARCHAR(50) NOT NULL,
     FOREIGN KEY (place_id) REFERENCES ai_places(id)
+);
+
+-- 4. ai_place_regions 테이블
+CREATE TABLE ai_place_regions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    place_id INT NOT NULL,
+    region VARCHAR(30) NOT NULL,
+    FOREIGN KEY (place_id) REFERENCES ai_places(id),
+    UNIQUE KEY uq_place_region (place_id, region),
+    INDEX idx_region (region)
 );
