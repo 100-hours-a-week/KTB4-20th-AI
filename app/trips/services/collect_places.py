@@ -267,6 +267,7 @@ def call_nearby_search(
     body = {
         "includedTypes": included_types,
         "maxResultCount": max_result_count,
+        "languageCode": "ko",
         "locationRestriction": {
             "circle": {
                 "center": {"latitude": latitude, "longitude": longitude},
