@@ -15,10 +15,14 @@ CLEAR_MISMATCH_KM)을 정하고 2단계 baseline 지표(latency·구조화 출�
 
   # 다른 모델로, 기존 결과 파일에서 성공한 건과 같은 사진·미션만 호출 (모델 비교용)
   uv run python -m scripts.baseline_verify ... --model gemini-3.1-flash-lite --same-as <pro 결과 jsonl> --out <새 jsonl>
+
+  # 로컬 모델(Ollama 등 OpenAI 호환 서버)로, 닮은 장소(월정교↔동궁과월지) 케이스만 호출
+  uv run python -m scripts.baseline_verify ... --model qwen2.5vl:7b --lookalike-only --out <새 jsonl>
 """
 
 import argparse
 import asyncio
+import base64
 import functools
 import json
 import os
@@ -28,7 +32,9 @@ import statistics
 import time
 import zipfile
 
+import httpx
 from google.genai import types
+from pydantic import ValidationError
 
 from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import _haversine_km, normalize_image
@@ -55,6 +61,13 @@ PRICES = {
     "gemini-3.1-pro-preview": (2.0, 12.0),
     "gemini-3.1-flash-lite": (0.25, 1.50),
 }
+# 자체 서빙 후보. OpenAI 호환 API(/chat/completions)로 부르므로 Ollama(맥 사전 평가)와 vLLM(RunPod) 모두 같은 코드로 잰다
+# qwen3-vl 기본 태그(8b)는 생각(thinking) 모델이라 사진 1건에 108초가 걸리고(생각 끄는 옵션도 안 먹힘) 그 1건은 답이 비었다.
+# 바로 답하는 instruct 태그를 쓴다
+LOCAL_MODELS = ("qwen2.5vl:7b", "qwen3-vl:8b-instruct")
+DEFAULT_LOCAL_URL = "http://localhost:11434/v1"
+# 겉모습이 비슷해 Flash Lite가 자주 헷갈린 장소 쌍. 로컬 모델 사전 평가는 이 쌍의 오답 미션만 먼저 돌린다
+LOOKALIKE = {"월정교", "동궁과월지"}
 
 
 def load_mapping(path: pathlib.Path) -> list[dict]:
@@ -98,22 +111,46 @@ def read_photo(location: tuple[pathlib.Path, str | None]) -> bytes:
     return _open_zip(path).read(member)
 
 
-def build_cases(rows: list[dict], available: set[str], per_place: int, seed: int) -> list[dict]:
+def build_cases(
+    rows: list[dict], available: set[str], per_place: int, seed: int, all_negatives: bool = False
+) -> list[dict]:
     # 장소마다 사진 per_place장을 뽑아, 같은 장소 미션(positive)과 다른 장소 미션(negative)을 한 번씩 만든다
     # 장소별로 순서를 한 번 섞어두고 앞에서부터 가져가서, per_place를 늘려도 앞서 뽑힌 사진은 그대로 유지된다
+    # all_negatives면 나머지 장소 미션을 모두 만든다. 정답이 "실패"로 정해져 있어 사람 표시 없이 평가 건수를 늘릴 수 있다
     cases = []
     for place in LANDMARKS:
         pool = sorted((r for r in rows if r["place"] == place and r["photo"] in available), key=lambda r: r["photo"])
         random.Random(f"{seed}-{place}").shuffle(pool)
         for r in pool[:per_place]:
-            other = random.Random(f"{seed}-{r['photo']}").choice([p for p in LANDMARKS if p != place])
-            for kind, target in (("positive", place), ("negative", other)):
-                cases.append({**r, "kind": kind, "target": target})
+            others = [p for p in LANDMARKS if p != place]
+            if not all_negatives:
+                others = [random.Random(f"{seed}-{r['photo']}").choice(others)]
+            cases.append({**r, "kind": "positive", "target": place})
+            for other in others:
+                cases.append({**r, "kind": "negative", "target": other})
     return cases
 
 
 def case_key(case: dict) -> str:
     return f"{case['photo']}|{case['kind']}|{case['target']}"
+
+
+def is_lookalike(case: dict) -> bool:
+    # 월정교 사진에 동궁과월지 미션(또는 반대)을 준 오답 케이스. 여기서 "맞다"고 하면 닮은 장소를 못 가린 것
+    return case["kind"] == "negative" and {case["place"], case["target"]} == LOOKALIKE
+
+
+def user_text(case: dict) -> str:
+    return f"목표 장소: {case['target']}\n미션 내용: {MISSIONS[case['target']]}"
+
+
+def vlm_fields(vlm: VlmResult) -> dict:
+    return {
+        "match_score": vlm.match_score,
+        "landmark_confidence": vlm.landmark_confidence,
+        "detected_labels": [label.model_dump() for label in vlm.detected_labels],
+        "retry_hint": vlm.retry_hint,
+    }
 
 
 async def judge(case: dict, image_bytes: bytes) -> dict:
@@ -122,7 +159,7 @@ async def judge(case: dict, image_bytes: bytes) -> dict:
     processed = normalize_image(image_bytes)
     t1 = time.perf_counter()
     contents = [
-        f"목표 장소: {case['target']}\n미션 내용: {MISSIONS[case['target']]}",
+        user_text(case),
         types.Part.from_bytes(data=processed, mime_type="image/jpeg"),
     ]
     config = types.GenerateContentConfig(
@@ -150,13 +187,54 @@ async def judge(case: dict, image_bytes: bytes) -> dict:
         parsed=isinstance(response.parsed, VlmResult),
     )
     if isinstance(response.parsed, VlmResult):
-        vlm = response.parsed
-        record.update(
-            match_score=vlm.match_score,
-            landmark_confidence=vlm.landmark_confidence,
-            detected_labels=[label.model_dump() for label in vlm.detected_labels],
-            retry_hint=vlm.retry_hint,
-        )
+        record.update(vlm_fields(response.parsed))
+    return record
+
+
+async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str) -> dict:
+    # judge와 같은 프롬프트·리사이즈·응답 형식으로 OpenAI 호환 서버를 1번 부른다. 로컬 모델이라 비용은 0으로 적는다
+    t0 = time.perf_counter()
+    processed = normalize_image(image_bytes)
+    t1 = time.perf_counter()
+    image_url = "data:image/jpeg;base64," + base64.b64encode(processed).decode()
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": VERIFY_SYSTEM_PROMPT},
+            {"role": "user", "content": [
+                {"type": "text", "text": user_text(case)},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ]},
+        ],
+        # Gemini의 response_schema와 같은 역할. 서버가 이 스키마 모양으로만 답하게 막는다
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "VlmResult", "schema": VlmResult.model_json_schema()},
+        },
+    }
+    record = {"normalize_sec": round(t1 - t0, 3), "resized_bytes": len(processed), "original_bytes": len(image_bytes)}
+    try:
+        # 첫 호출은 모델을 메모리에 올리느라 수십 초 걸릴 수 있어 넉넉히 기다린다
+        async with httpx.AsyncClient(timeout=300) as client:
+            response = await client.post(f"{base_url.rstrip('/')}/chat/completions", json=payload)
+            response.raise_for_status()
+    except Exception as e:  # noqa: BLE001 — 측정 스크립트라 실패도 결과로 기록한다
+        record.update(model_sec=round(time.perf_counter() - t1, 3), error=f"{type(e).__name__}: {e}")
+        return record
+    record["model_sec"] = round(time.perf_counter() - t1, 3)
+
+    body = response.json()
+    usage = body.get("usage") or {}
+    content = body["choices"][0]["message"].get("content") or ""
+    record.update(
+        prompt_tokens=usage.get("prompt_tokens", 0), image_tokens=0,
+        output_tokens=usage.get("completion_tokens", 0), thought_tokens=0, cost_usd=0.0,
+    )
+    try:
+        record.update(parsed=True, **vlm_fields(VlmResult.model_validate_json(content)))
+    except ValidationError:
+        # 스키마를 벗어난 응답은 1차 실패로 센다. 원인을 보려고 앞부분만 남긴다
+        record.update(parsed=False, raw=content[:500])
     return record
 
 
@@ -187,17 +265,24 @@ async def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, required=True, help="결과 JSONL 경로 (레포 밖에 둘 것)")
     ap.add_argument("--max-calls", type=int, default=0, help="이번 실행의 최대 호출 수 (0이면 제한 없음)")
     ap.add_argument("--dry-run", action="store_true", help="호출하지 않고 계획만 출력")
-    ap.add_argument("--model", default=gemini_client.MODEL_NAME, choices=sorted(PRICES), help="판정 모델")
+    ap.add_argument("--model", default=gemini_client.MODEL_NAME, choices=sorted(PRICES) + list(LOCAL_MODELS),
+                    help="판정 모델")
+    ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="로컬 모델을 부를 OpenAI 호환 서버 주소")
     ap.add_argument("--same-as", type=pathlib.Path, help="이 결과 파일에서 성공한 건과 같은 사진·미션만 호출")
+    ap.add_argument("--lookalike-only", action="store_true", help="월정교↔동궁과월지 오답 미션만 호출")
+    ap.add_argument("--all-negatives", action="store_true", help="사진마다 나머지 장소 미션을 모두 만든다 (기본은 1개)")
     args = ap.parse_args()
     if args.same_as and args.same_as.resolve() == args.out.resolve():
         ap.error("--same-as와 --out은 다른 파일이어야 함")
+    local = args.model in LOCAL_MODELS
     # judge는 호출할 때마다 gemini_client.MODEL_NAME을 읽으므로 여기서 바꾸면 이 실행 전체가 이 모델로 판정한다
     gemini_client.MODEL_NAME = args.model
 
     rows = load_mapping(args.mapping)
     index = index_photos(args.photos)
-    cases = build_cases(rows, set(index), args.per_place, args.seed)
+    cases = build_cases(rows, set(index), args.per_place, args.seed, args.all_negatives)
+    if args.lookalike_only:
+        cases = [c for c in cases if is_lookalike(c)]
     if args.same_as:
         base = [json.loads(line) for line in args.same_as.read_text(encoding="utf-8").splitlines() if line.strip()]
         keep = {case_key(r) for r in base if "error" not in r}
@@ -210,15 +295,18 @@ async def main() -> None:
     if args.max_calls:
         todo = todo[: args.max_calls]
 
-    print(f"모델: {gemini_client.MODEL_NAME}")
+    print(f"모델: {gemini_client.MODEL_NAME}" + (f" (로컬, {args.base_url})" if local else ""))
     print(f"매핑 {len(rows)}장 중 찾은 사진 {sum(r['photo'] in index for r in rows)}장")
     for place in LANDMARKS:
-        n = sum(1 for c in cases if c["place"] == place) // 2
-        print(f"  {place}: 표본 {n}장")
+        n = sum(1 for c in cases if c["place"] == place)
+        print(f"  {place} 사진: 케이스 {n}건")
     print(f"케이스 {len(cases)}건 (이미 기록 {len(done & {case_key(c) for c in cases})}건) → 이번에 호출할 것 {len(todo)}건")
-    # pro-preview 1회 27원 실측을 단가 비율로 환산한 대략값. 토큰 수가 모델마다 달라 실제와 차이날 수 있다
-    per_call_won = 27 * PRICES[gemini_client.MODEL_NAME][0] / PRICES["gemini-3.1-pro-preview"][0]
-    print(f"예상 비용: 약 {len(todo) * per_call_won:,.0f}원 (pro-preview 1회 27원 실측을 단가 비율로 환산)")
+    if local:
+        print("예상 비용: 0원 (로컬 모델)")
+    else:
+        # pro-preview 1회 27원 실측을 단가 비율로 환산한 대략값. 토큰 수가 모델마다 달라 실제와 차이날 수 있다
+        per_call_won = 27 * PRICES[gemini_client.MODEL_NAME][0] / PRICES["gemini-3.1-pro-preview"][0]
+        print(f"예상 비용: 약 {len(todo) * per_call_won:,.0f}원 (pro-preview 1회 27원 실측을 단가 비율로 환산)")
     if args.dry_run:
         for c in todo[:6]:
             print(f"  - {c['photo']} ({c['place']} 사진) → 목표 {c['target']} [{c['kind']}]")
@@ -227,7 +315,11 @@ async def main() -> None:
     with args.out.open("a", encoding="utf-8") as f:
         for i, case in enumerate(todo, 1):
             try:
-                record = await judge(case, read_photo(index[case["photo"]]))
+                image_bytes = read_photo(index[case["photo"]])
+                if local:
+                    record = await judge_local(case, image_bytes, args.base_url, args.model)
+                else:
+                    record = await judge(case, image_bytes)
             except Exception as e:  # noqa: BLE001 — 사진 하나가 깨져도 전체 실행을 멈추지 않는다
                 record = {"model_sec": 0.0, "error": f"사진 처리 실패 {type(e).__name__}: {e}"}
             distance = _haversine_km(case["photo_coords"], LANDMARKS[case["target"]]) if case["photo_coords"] else None
