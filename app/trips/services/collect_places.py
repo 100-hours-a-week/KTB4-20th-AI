@@ -5,7 +5,7 @@ from typing import cast
 import requests
 
 from app.core.config import settings
-from app.trips.constants import HEX_GRID_POINTS, HEX_RADIUS_M, COLLECTION_AREA_TO_REGION
+from app.trips.constants import COLLECTION_AREA_TO_REGION, HEX_GRID_POINTS, HEX_RADIUS_M
 from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference
 
 BATCH_SIZE = 20  # Nearby Search 1회 최대 결과 수
@@ -157,6 +157,7 @@ def count_places() -> int:
 
 # insert_place_region, insert_place_category, insert_place_type
 from app.trips.services.db import get_connection
+
 
 def insert_place_region(place_row_id: int, region: str) -> None:
     conn = get_connection()
