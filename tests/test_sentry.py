@@ -44,8 +44,19 @@ def test_sentry_not_initialized_without_dsn(monkeypatch):
     assert calls == []
 
 
+def test_release_has_commit_sha_when_given(monkeypatch):
+    monkeypatch.setattr(settings, "git_sha", "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678")
+    assert sentry._release() == f"ktb4-ai-server@{sentry._app_version()}+a1b2c3d"
+
+
+def test_release_is_version_only_without_sha(monkeypatch):
+    monkeypatch.setattr(settings, "git_sha", "")
+    assert sentry._release() == f"ktb4-ai-server@{sentry._app_version()}"
+
+
 def test_sentry_initialized_with_safe_options(monkeypatch):
     calls = []
+    monkeypatch.setattr(settings, "git_sha", "")
     monkeypatch.setattr(settings, "sentry_dsn", "https://key@o0.ingest.sentry.io/0")
     monkeypatch.setattr(sentry_sdk, "init", lambda **kwargs: calls.append(kwargs))
     assert sentry.init_sentry() is True
