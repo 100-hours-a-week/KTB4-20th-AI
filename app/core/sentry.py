@@ -22,6 +22,14 @@ def _app_version() -> str:
         return "unknown"
 
 
+def _release() -> str:
+    # 버전 번호는 사람이 올려야 해서 깜빡할 수 있다. 커밋 SHA를 붙여 배포마다 release가 달라지게 한다
+    # "+"는 semver의 빌드 정보 표기다. SHA가 없으면(로컬) 버전만 쓴다
+    sha = settings.git_sha.strip()[:7]
+    version = f"ktb4-ai-server@{_app_version()}"
+    return f"{version}+{sha}" if sha else version
+
+
 def _strip_query(url: str) -> str:
     # presigned URL의 서명(X-Amz-Signature 등)이 쿼리에 있어서 쿼리를 통째로 뗀다
     return url.split("?", 1)[0]
@@ -62,7 +70,7 @@ def init_sentry() -> bool:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         environment=settings.sentry_environment,
-        release=f"ktb4-ai-server@{_app_version()}",
+        release=_release(),
         traces_sample_rate=settings.sentry_traces_sample_rate,
         send_default_pii=False,  # IP·쿠키 같은 개인정보를 보내지 않는다
         include_local_variables=False,  # 스택의 지역 변수에 토큰·사진 주소가 들어 있을 수 있다
