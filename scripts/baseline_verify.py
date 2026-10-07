@@ -141,7 +141,9 @@ def is_lookalike(case: dict) -> bool:
 
 
 def user_text(case: dict) -> str:
-    return f"목표 장소: {case['target']}\n미션 내용: {MISSIONS[case['target']]}"
+    # score_photo와 같은 형식. 평가셋 B처럼 사진마다 미션이 다르면 case["mission"]을 쓴다
+    mission = case.get("mission") or MISSIONS[case["target"]]
+    return f"목표 장소: {case['target']}\n미션 내용: {mission}"
 
 
 def vlm_fields(vlm: VlmResult) -> dict:
