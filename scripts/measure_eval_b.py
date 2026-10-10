@@ -20,12 +20,13 @@ import json
 import pathlib
 import zipfile
 
+from app.core.config import settings
 from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import to_grade
 from scripts.baseline_verify import (
     DEFAULT_LOCAL_URL,
-    LOCAL_MODELS,
     PRICES,
+    is_openai_compat,
     judge,
     judge_local,
 )
@@ -86,10 +87,10 @@ async def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, required=True, help="결과 JSONL (레포 밖에 둘 것)")
     ap.add_argument("--max-calls", type=int, default=0, help="이번 실행의 최대 호출 수 (0이면 제한 없음)")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--model", default=gemini_client.MODEL_NAME, choices=sorted(PRICES) + list(LOCAL_MODELS))
-    ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="로컬·RunPod 모델의 OpenAI 호환 주소")
+    ap.add_argument("--model", default=gemini_client.MODEL_NAME, help="Gemini 모델 이름, 또는 OpenAI 호환 서버의 모델 이름")
+    ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="OpenAI 호환 서버 주소 (로컬 Ollama 또는 RunPod)")
     args = ap.parse_args()
-    local = args.model in LOCAL_MODELS
+    local = is_openai_compat(args.model)
     gemini_client.MODEL_NAME = args.model
 
     eval_b = args.aihub / "eval_b"
@@ -107,7 +108,8 @@ async def main() -> None:
         todo = todo[: args.max_calls]
 
     counts = collections.Counter(c["eval_set"] for c in cases)
-    print(f"모델: {args.model}" + (f" (OpenAI 호환, {args.base_url})" if local else ""))
+    key_note = "키 있음" if settings.vlm_api_key else "키 없음"  # 키 값은 출력하지 않는다
+    print(f"모델: {args.model}" + (f" (OpenAI 호환, {args.base_url}, {key_note})" if local else ""))
     print(f"케이스 {dict(counts)} (이미 기록 {len(cases) - len([c for c in cases if case_key(c) not in done])}건) → 이번에 호출할 것 {len(todo)}건")
     if not local:
         per_call_won = 27 * PRICES[args.model][0] / PRICES["gemini-3.1-pro-preview"][0]
@@ -124,7 +126,7 @@ async def main() -> None:
             try:
                 zf = zips.setdefault(case["zip"], zipfile.ZipFile(args.aihub / case["zip"]))
                 image = zf.read(case["member"])
-                record = await (judge_local(case, image, args.base_url, args.model) if local else judge(case, image))
+                record = await (judge_local(case, image, args.base_url, args.model, settings.vlm_api_key) if local else judge(case, image))
             except Exception as e:  # noqa: BLE001 — 사진 하나가 깨져도 전체 실행을 멈추지 않는다
                 record = {"model_sec": 0.0, "error": f"사진 처리 실패 {type(e).__name__}: {e}"}
             line = {k: case[k] for k in ("eval_set", "photo", "place", "region", "category", "mission", "truth")}

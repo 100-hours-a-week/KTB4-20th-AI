@@ -36,6 +36,7 @@ import httpx
 from google.genai import types
 from pydantic import ValidationError
 
+from app.core.config import settings
 from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import _haversine_km, normalize_image
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
@@ -64,7 +65,6 @@ PRICES = {
 # 자체 서빙 후보. OpenAI 호환 API(/chat/completions)로 부르므로 Ollama(맥 사전 평가)와 vLLM(RunPod) 모두 같은 코드로 잰다
 # qwen3-vl 기본 태그(8b)는 생각(thinking) 모델이라 사진 1건에 108초가 걸리고(생각 끄는 옵션도 안 먹힘) 그 1건은 답이 비었다.
 # 바로 답하는 instruct 태그를 쓴다
-LOCAL_MODELS = ("qwen2.5vl:7b", "qwen3-vl:8b-instruct")
 DEFAULT_LOCAL_URL = "http://localhost:11434/v1"
 # 겉모습이 비슷해 Flash Lite가 자주 헷갈린 장소 쌍. 로컬 모델 사전 평가는 이 쌍의 오답 미션만 먼저 돌린다
 LOOKALIKE = {"월정교", "동궁과월지"}
@@ -131,6 +131,16 @@ def build_cases(
     return cases
 
 
+def is_openai_compat(model: str) -> bool:
+    # 가격표에 있는 이름은 Gemini, 나머지(로컬 Ollama, RunPod vLLM 등)는 OpenAI 호환 서버로 부른다
+    return model not in PRICES
+
+
+def auth_headers(api_key: str) -> dict[str, str]:
+    # RunPod처럼 키가 필요한 서버만 헤더를 붙인다. 로컬 Ollama는 키 없이 부른다
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
 def case_key(case: dict) -> str:
     return f"{case['photo']}|{case['kind']}|{case['target']}"
 
@@ -193,8 +203,8 @@ async def judge(case: dict, image_bytes: bytes) -> dict:
     return record
 
 
-async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str) -> dict:
-    # judge와 같은 프롬프트·리사이즈·응답 형식으로 OpenAI 호환 서버를 1번 부른다. 로컬 모델이라 비용은 0으로 적는다
+async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str, api_key: str = "") -> dict:
+    # judge와 같은 프롬프트·리사이즈·응답 형식으로 OpenAI 호환 서버를 1번 부른다. 비용은 GPU 시간으로 따로 계산하므로 0으로 적는다
     t0 = time.perf_counter()
     processed = normalize_image(image_bytes)
     t1 = time.perf_counter()
@@ -216,9 +226,11 @@ async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str)
     }
     record = {"normalize_sec": round(t1 - t0, 3), "resized_bytes": len(processed), "original_bytes": len(image_bytes)}
     try:
-        # 첫 호출은 모델을 메모리에 올리느라 수십 초 걸릴 수 있어 넉넉히 기다린다
+        # 첫 호출은 모델을 메모리에 올리느라(서버리스는 콜드스타트) 수십 초 걸릴 수 있어 넉넉히 기다린다
         async with httpx.AsyncClient(timeout=300) as client:
-            response = await client.post(f"{base_url.rstrip('/')}/chat/completions", json=payload)
+            response = await client.post(
+                f"{base_url.rstrip('/')}/chat/completions", json=payload, headers=auth_headers(api_key),
+            )
             response.raise_for_status()
     except Exception as e:  # noqa: BLE001 — 측정 스크립트라 실패도 결과로 기록한다
         record.update(model_sec=round(time.perf_counter() - t1, 3), error=f"{type(e).__name__}: {e}")
@@ -267,16 +279,16 @@ async def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, required=True, help="결과 JSONL 경로 (레포 밖에 둘 것)")
     ap.add_argument("--max-calls", type=int, default=0, help="이번 실행의 최대 호출 수 (0이면 제한 없음)")
     ap.add_argument("--dry-run", action="store_true", help="호출하지 않고 계획만 출력")
-    ap.add_argument("--model", default=gemini_client.MODEL_NAME, choices=sorted(PRICES) + list(LOCAL_MODELS),
-                    help="판정 모델")
-    ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="로컬 모델을 부를 OpenAI 호환 서버 주소")
+    ap.add_argument("--model", default=gemini_client.MODEL_NAME,
+                    help="Gemini 모델 이름, 또는 OpenAI 호환 서버의 모델 이름 (예: qwen2.5vl:7b, Qwen/Qwen2.5-VL-7B-Instruct)")
+    ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="OpenAI 호환 서버 주소 (로컬 Ollama 또는 RunPod)")
     ap.add_argument("--same-as", type=pathlib.Path, help="이 결과 파일에서 성공한 건과 같은 사진·미션만 호출")
     ap.add_argument("--lookalike-only", action="store_true", help="월정교↔동궁과월지 오답 미션만 호출")
     ap.add_argument("--all-negatives", action="store_true", help="사진마다 나머지 장소 미션을 모두 만든다 (기본은 1개)")
     args = ap.parse_args()
     if args.same_as and args.same_as.resolve() == args.out.resolve():
         ap.error("--same-as와 --out은 다른 파일이어야 함")
-    local = args.model in LOCAL_MODELS
+    local = is_openai_compat(args.model)
     # judge는 호출할 때마다 gemini_client.MODEL_NAME을 읽으므로 여기서 바꾸면 이 실행 전체가 이 모델로 판정한다
     gemini_client.MODEL_NAME = args.model
 
@@ -297,7 +309,8 @@ async def main() -> None:
     if args.max_calls:
         todo = todo[: args.max_calls]
 
-    print(f"모델: {gemini_client.MODEL_NAME}" + (f" (로컬, {args.base_url})" if local else ""))
+    key_note = "키 있음" if settings.vlm_api_key else "키 없음"  # 키 값은 출력하지 않는다
+    print(f"모델: {gemini_client.MODEL_NAME}" + (f" (OpenAI 호환, {args.base_url}, {key_note})" if local else ""))
     print(f"매핑 {len(rows)}장 중 찾은 사진 {sum(r['photo'] in index for r in rows)}장")
     for place in LANDMARKS:
         n = sum(1 for c in cases if c["place"] == place)
@@ -319,7 +332,7 @@ async def main() -> None:
             try:
                 image_bytes = read_photo(index[case["photo"]])
                 if local:
-                    record = await judge_local(case, image_bytes, args.base_url, args.model)
+                    record = await judge_local(case, image_bytes, args.base_url, args.model, settings.vlm_api_key)
                 else:
                     record = await judge(case, image_bytes)
             except Exception as e:  # noqa: BLE001 — 사진 하나가 깨져도 전체 실행을 멈추지 않는다

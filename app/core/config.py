@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     sentry_environment: str = "local"  # local / dev / prod
     sentry_traces_sample_rate: float = 0.0  # 성능 추적 비율. 0이면 끔
     git_sha: str = ""  # 배포 이미지의 커밋 SHA. CI가 빌드할 때 넣는다 (로컬은 비어 있음)
+    vlm_api_key: str = ""  # OpenAI 호환 모델 서버(RunPod 등) API 키. 키가 필요 없는 로컬 Ollama는 비워 둔다
 
     @property
     def allowed_image_hosts_list(self) -> list[str]:
