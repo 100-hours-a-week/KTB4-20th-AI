@@ -82,12 +82,13 @@ def select_photos(aihub: pathlib.Path, per_category: int, per_region: int, seed:
     return chosen
 
 
-async def write_one(row: dict, image: bytes) -> WrittenMission:
+async def write_one(row: dict, image: bytes, instruction: str = "") -> WrittenMission:
+    # instruction: 이번 사진에만 더하는 지시 (학습 데이터에서 "조건을 꼭 붙여라" 등)
     config = types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT, response_mime_type="application/json", response_schema=WrittenMission,
     )
     contents = [
-        f"장소: {row['place_name']} ({row['region']}, {row['category_ko']})",
+        f"장소: {row['place_name']} ({row['region']}, {row['category_ko']})" + (f"\n{instruction}" if instruction else ""),
         types.Part.from_bytes(data=normalize_image(image), mime_type="image/jpeg"),
     ]
     response = await gemini_client._get_client().aio.models.generate_content(
