@@ -1,6 +1,16 @@
+import json
+
 import pytest
 
-from scripts.eval_cases import EvalCase, classify, dedupe, from_a, metrics
+from scripts.eval_cases import (
+    EvalCase,
+    apply_relabel,
+    classify,
+    dedupe,
+    from_a,
+    load_relabel,
+    metrics,
+)
 
 
 def _case(truth="success", score=95.0, case_type="target_place", **kw):
@@ -77,3 +87,33 @@ def test_same_case_measured_twice_is_counted_once():
 def test_retried_answer_replaces_earlier_error():
     # 하루 한도(429)로 실패한 줄 뒤에 다시 잰 결과가 붙으면 다시 잰 결과를 쓴다
     assert [c.match_score for c in dedupe([_case(score=None), _case(score=88)])] == [88.0]
+
+
+def test_relabel_replaces_truth_and_drops_unclear():
+    cases = [
+        _case("fail", photo="a.jpg"),
+        _case("success", photo="b.jpg"),
+        _case("fail", photo="c.jpg"),  # 재표시 대상이 아니면 기존 정답 그대로
+    ]
+    relabel = {("B", "a.jpg"): "retry", ("B", "b.jpg"): "unclear"}
+    out = apply_relabel(cases, relabel)
+    assert [(c.photo, c.truth) for c in out] == [("a.jpg", "retry"), ("c.jpg", "fail")]
+
+
+def test_relabel_only_applies_to_target_place_missions():
+    # 재표시는 사진을 찍은 장소의 미션만 다시 본 것이다. 다른 장소·닮은 장소 미션은 정답이 항상 실패다
+    cases = [
+        _case("success", photo="a.jpg", eval_set="A", target="불국사"),
+        _case("fail", photo="a.jpg", eval_set="A", target="석굴암", case_type="other_place"),
+    ]
+    out = apply_relabel(cases, {("A", "a.jpg"): "unclear"})
+    assert [(c.target, c.truth) for c in out] == [("석굴암", "fail")]
+
+
+def test_load_relabel_skips_items_not_yet_labeled(tmp_path):
+    path = tmp_path / "relabel_labels.json"
+    path.write_text(json.dumps({"items": [
+        {"eval_set": "B", "photo": "a.jpg", "label": "retry", "note": ""},
+        {"eval_set": "A", "photo": "b.jpg"},  # 아직 고르지 않은 사진
+    ]}), encoding="utf-8")
+    assert load_relabel(path) == {("B", "a.jpg"): "retry"}

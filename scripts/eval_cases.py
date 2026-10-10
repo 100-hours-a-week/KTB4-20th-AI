@@ -14,7 +14,8 @@ Positive = "성공" 판정이다. 사람 정답과 모델 등급을 비교해 �
       --a /Volumes/T7/aihub/278_동부권/baseline/pro-preview_default.jsonl \\
       --a /Volumes/T7/aihub/278_동부권/baseline/pro-preview_lookalike100.jsonl \\
       --a-labels /Volumes/T7/aihub/labeling/gyeongju_labels.json \\
-      --b /Volumes/T7/aihub/eval_b/results/pro_B.jsonl
+      --b /Volumes/T7/aihub/eval_b/results/pro_B.jsonl \\
+      --relabel /Volumes/T7/aihub/relabel/relabel_labels.json
 """
 
 import argparse
@@ -133,6 +134,30 @@ def from_b(records: list[dict]) -> list[EvalCase]:
     ]
 
 
+class RelabelItem(BaseModel):
+    # 정답 재표시 화면이 내보낸 relabel_labels.json의 한 줄. 화면 쪽 칸(group·note 등)은 쓰지 않는다
+    eval_set: Literal["A", "B", "B_aug"]
+    photo: str
+    label: Grade | Literal["unclear"] | None = None  # unclear = 미션 애매, None = 아직 안 고름
+
+
+def load_relabel(path: pathlib.Path) -> dict[tuple[str, str], str]:
+    items = [RelabelItem.model_validate(x) for x in json.loads(path.read_text(encoding="utf-8"))["items"]]
+    return {(x.eval_set, x.photo): x.label for x in items if x.label}
+
+
+def apply_relabel(cases: list[EvalCase], relabel: dict[tuple[str, str], str]) -> list[EvalCase]:
+    # 재표시는 사진을 찍은 장소의 미션만 다시 본 것이다. 다른 장소·닮은 장소 미션은 정답이 항상 실패라 그대로 둔다
+    # 미션 애매(unclear)는 미션 자체가 문제라 평가에서 뺀다
+    out = []
+    for c in cases:
+        label = relabel.get((c.eval_set, c.photo)) if c.case_type == "target_place" else None
+        if label == "unclear":
+            continue
+        out.append(c.model_copy(update={"truth": label}) if label else c)
+    return out
+
+
 def dedupe(cases: list[EvalCase]) -> list[EvalCase]:
     # 같은 사진·미션이 여러 번 기록됐으면 하나만 쓴다. 측정 파일은 에러(429 등) 뒤에 다시 잰 결과를 덧붙이므로
     # 답이 있는 기록을 우선하고, 둘 다 답이 있으면 먼저 읽은 것을 쓴다
@@ -168,6 +193,7 @@ def main() -> None:
     ap.add_argument("--a", type=pathlib.Path, action="append", default=[], help="평가셋 A 결과 JSONL (여러 번 가능)")
     ap.add_argument("--a-labels", type=pathlib.Path, help="평가셋 A 사람 정답 (gyeongju_labels.json)")
     ap.add_argument("--b", type=pathlib.Path, action="append", default=[], help="평가셋 B·B 보강 결과 JSONL")
+    ap.add_argument("--relabel", type=pathlib.Path, help="정답 재표시 결과 (relabel_labels.json). 주면 기존 정답 대신 씀")
     ap.add_argument("--out", type=pathlib.Path, help="통합한 EvalCase를 JSONL로 저장 (레포 밖에 둘 것)")
     args = ap.parse_args()
     if args.a and not args.a_labels:
@@ -181,6 +207,10 @@ def main() -> None:
     for path in args.b:
         cases += from_b(_read_jsonl(path))
     cases = dedupe(cases)
+    if args.relabel:
+        before = len(cases)
+        cases = apply_relabel(cases, load_relabel(args.relabel))
+        print(f"재표시 정답 적용 · 미션 애매로 뺀 건 {before - len(cases)}건")
     models = sorted({c.model for c in cases})
     print(f"모델 {models} · 케이스 {len(cases)}건\n")
     report(cases)
