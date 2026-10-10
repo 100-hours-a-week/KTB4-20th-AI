@@ -158,6 +158,15 @@ def apply_relabel(cases: list[EvalCase], relabel: dict[tuple[str, str], str]) ->
     return out
 
 
+def load_split(path: pathlib.Path, side: str) -> set[str]:
+    # split_eval.py가 만든 eval_split.json에서 한쪽(dev 또는 final)의 사진 이름을 읽는다
+    return set(json.loads(path.read_text(encoding="utf-8"))["photos"][side])
+
+
+def apply_split(cases: list[EvalCase], photos: set[str]) -> list[EvalCase]:
+    return [c for c in cases if c.photo in photos]
+
+
 def dedupe(cases: list[EvalCase]) -> list[EvalCase]:
     # 같은 사진·미션이 여러 번 기록됐으면 하나만 쓴다. 측정 파일은 에러(429 등) 뒤에 다시 잰 결과를 덧붙이므로
     # 답이 있는 기록을 우선하고, 둘 다 답이 있으면 먼저 읽은 것을 쓴다
@@ -194,10 +203,14 @@ def main() -> None:
     ap.add_argument("--a-labels", type=pathlib.Path, help="평가셋 A 사람 정답 (gyeongju_labels.json)")
     ap.add_argument("--b", type=pathlib.Path, action="append", default=[], help="평가셋 B·B 보강 결과 JSONL")
     ap.add_argument("--relabel", type=pathlib.Path, help="정답 재표시 결과 (relabel_labels.json). 주면 기존 정답 대신 씀")
+    ap.add_argument("--split-file", type=pathlib.Path, help="개선용·최종용 나누기 결과 (eval_split.json)")
+    ap.add_argument("--split", choices=("dev", "final"), help="이쪽 사진만 센다. final은 출시 판단 때 한 번만")
     ap.add_argument("--out", type=pathlib.Path, help="통합한 EvalCase를 JSONL로 저장 (레포 밖에 둘 것)")
     args = ap.parse_args()
     if args.a and not args.a_labels:
         ap.error("--a를 쓰려면 --a-labels가 필요함")
+    if bool(args.split) != bool(args.split_file):
+        ap.error("--split과 --split-file은 같이 써야 함")
 
     cases: list[EvalCase] = []
     if args.a:
@@ -211,6 +224,9 @@ def main() -> None:
         before = len(cases)
         cases = apply_relabel(cases, load_relabel(args.relabel))
         print(f"재표시 정답 적용 · 미션 애매로 뺀 건 {before - len(cases)}건")
+    if args.split:
+        cases = apply_split(cases, load_split(args.split_file, args.split))
+        print(f"{args.split} 쪽만 셈")
     models = sorted({c.model for c in cases})
     print(f"모델 {models} · 케이스 {len(cases)}건\n")
     report(cases)

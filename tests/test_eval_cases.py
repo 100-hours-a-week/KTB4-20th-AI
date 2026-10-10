@@ -5,6 +5,7 @@ import pytest
 from scripts.eval_cases import (
     EvalCase,
     apply_relabel,
+    apply_split,
     classify,
     dedupe,
     from_a,
@@ -117,3 +118,8 @@ def test_load_relabel_skips_items_not_yet_labeled(tmp_path):
         {"eval_set": "A", "photo": "b.jpg"},  # 아직 고르지 않은 사진
     ]}), encoding="utf-8")
     assert load_relabel(path) == {("B", "a.jpg"): "retry"}
+
+
+def test_split_keeps_only_photos_on_that_side():
+    cases = [_case(photo="a.jpg"), _case(photo="b.jpg")]
+    assert [c.photo for c in apply_split(cases, {"b.jpg"})] == ["b.jpg"]
