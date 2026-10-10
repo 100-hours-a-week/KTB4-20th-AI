@@ -1,4 +1,10 @@
-from scripts.write_train_missions import PW_COND, PW_PLAIN, pw_mode, swap_targets
+from scripts.write_train_missions import (
+    PW_COND,
+    PW_PLAIN,
+    conflicts,
+    pw_mode,
+    swap_targets,
+)
 
 
 def _rec(photo, usable=True, with_condition=False, source="photo_written", category="FOOD"):
@@ -29,3 +35,14 @@ def test_swap_targets_are_usable_condition_missions_not_yet_swapped():
          "category": "FOOD", "usable": True},
     ]
     assert [r["photo"] for r in swap_targets(records)] == ["b"]
+
+
+def test_swap_targets_with_labels_use_only_human_success_parents():
+    # 2차: 원래 미션이 맞는 사진(사람이 성공으로 표시)에서만 바꾼다. 조건 없이 쓴 미션도 원본이 될 수 있다
+    records = [_rec("a"), _rec("b"), _rec("c", with_condition=True)]
+    assert [r["photo"] for r in swap_targets(records, {"a#pw", "c#pw"})] == ["a", "c"]
+
+
+def test_conflicts_rejects_together_with_close_up():
+    assert conflicts("다 같이 석갈비 가까이 찍기")
+    assert not conflicts("다 같이 석갈비 앞에서 찍기")
