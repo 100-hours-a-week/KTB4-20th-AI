@@ -1,5 +1,5 @@
 from scripts.baseline_verify import auth_headers, is_openai_compat, user_text
-from scripts.measure_eval_b import build_cases, case_key
+from scripts.measure_eval_b import build_cases, case_key, out_conflict, record_grade
 
 
 def _row(photo, place="황리단길"):
@@ -51,3 +51,24 @@ def test_api_key_header_only_when_key_is_set():
     # 로컬 Ollama는 키 없이, RunPod은 Bearer 키로 부른다
     assert auth_headers("") == {}
     assert auth_headers("k") == {"Authorization": "Bearer k"}
+
+
+def _record(model="qwen", fmt=None):
+    r = {"model": model}
+    if fmt:
+        r["format"] = fmt
+    return r
+
+
+def test_out_file_with_other_model_or_format_is_refused():
+    # 이미 잰 사진은 건너뛰므로, 다른 모델·형식 파일에 이어 쓰면 두 결과가 조용히 섞인다
+    assert out_conflict([], "qwen", "question") is None
+    assert out_conflict([_record(fmt="question")], "qwen", "question") is None
+    assert out_conflict([_record()], "qwen", "question") is not None  # format 칸 없는 예전 기록은 점수 형식
+    assert out_conflict([_record("gemini-3.1-pro-preview", "question")], "qwen", "question") is not None
+
+
+def test_summary_grade_comes_from_answer_for_question_format():
+    answer = {"judgeable": "yes", "target": "short", "condition": "na", "place": "yes"}
+    assert record_grade({"answer": answer, "grade": "success"}) == "retry"
+    assert record_grade({"match_score": 95}) == "success"

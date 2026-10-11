@@ -18,12 +18,33 @@ from scripts.question_format import QuestionAnswer, normalize, rule_grade, to_ex
 )
 def test_rule_grade_matches_labeling_screen(answer, grade):
     # 표시 화면(index.html)의 ruleGrade와 같은 규칙이어야 한다
-    assert rule_grade(QuestionAnswer(**answer)) == grade
+    assert rule_grade(QuestionAnswer(**{"target": None, "condition": None, "place": None, **answer})) == grade
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        '{"judgeable": "yes"}',  # 칸을 빼먹음
+        '{"judgeable": "yes", "target": null, "condition": null, "place": "yes"}',
+        '{"judgeable": "yes", "target": "enough", "condition": "na", "place": null}',
+        '{"judgeable": "yes", "target": "short", "condition": null, "place": "yes"}',
+    ],
+)
+def test_missing_answers_are_format_errors_not_success(answer):
+    # 측정 때 모델이 칸을 빼먹거나 null로 두면 규칙상 "성공"이 된다. 형식 오류로 막아 "판정 없음"으로 세게 한다
+    with pytest.raises(ValueError):
+        QuestionAnswer.model_validate_json(answer)
+
+
+def test_schema_requires_all_four_fields():
+    # 서버(vLLM)·Gemini가 스키마로 답을 막을 때 네 칸을 모두 쓰게 한다
+    assert set(QuestionAnswer.model_json_schema()["required"]) == {"judgeable", "target", "condition", "place"}
 
 
 def test_normalize_blanks_questions_that_cannot_be_asked():
     # 판단 불가면 나머지를, 대상이 없으면 조건을 물을 수 없다. 1차 파일럿은 대상 없음에도 Q3 답이 갈려 있었다
-    assert normalize({"q1": "no", "q2": "none", "q3": "no", "q4": "na"}) == QuestionAnswer(judgeable="no")
+    assert normalize({"q1": "no", "q2": "none", "q3": "no", "q4": "na"}) == QuestionAnswer(
+        judgeable="no", target=None, condition=None, place=None)
     assert normalize({"q1": "yes", "q2": "none", "q3": "no", "q4": "no"}) == QuestionAnswer(
         judgeable="yes", target="none", condition=None, place="no")
 

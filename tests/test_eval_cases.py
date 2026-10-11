@@ -1,4 +1,5 @@
 import json
+import pathlib
 
 import pytest
 
@@ -9,9 +10,13 @@ from scripts.eval_cases import (
     classify,
     dedupe,
     from_a,
+    from_b,
     load_relabel,
     metrics,
+    mixed_runs,
+    split_error,
 )
+from scripts.question_format import QuestionAnswer
 
 
 def _case(truth="success", score=95.0, case_type="target_place", **kw):
@@ -123,3 +128,68 @@ def test_load_relabel_skips_items_not_yet_labeled(tmp_path):
 def test_split_keeps_only_photos_on_that_side():
     cases = [_case(photo="a.jpg"), _case(photo="b.jpg")]
     assert [c.photo for c in apply_split(cases, {"b.jpg"})] == ["b.jpg"]
+
+
+def _answer(target="enough", condition="na", place="yes"):
+    return QuestionAnswer(judgeable="yes", target=target, condition=condition, place=place)
+
+
+def test_question_answer_is_graded_by_rule_without_score():
+    # 객관식 결과에는 점수가 없다. 점수가 없다고 "판정 없음"으로 빠지면 안 되고, 답에서 규칙으로 등급을 정한다
+    assert classify(_case("success", None, answer=_answer())) == "TP"
+    assert classify(_case("success", None, answer=_answer(target="short"))) == "FN_LIGHT"
+    assert classify(_case("success", None, answer=_answer(target="none", condition=None))) == "FN_HEAVY"
+    assert classify(_case("retry", None, answer=_answer())) == "FP_LIGHT"
+    assert metrics([_case("success", None, answer=_answer())])["no_answer"] == 0
+
+
+def test_question_answer_ignores_score_thresholds():
+    # 기준 점수를 바꿔도 객관식 결과는 그대로다 (규칙을 바꿔야 바뀐다)
+    case = _case("success", None, answer=_answer(target="short"))
+    assert classify(case, success=10, retry=5) == "FN_LIGHT"
+
+
+def test_from_b_reads_answer_and_regrades_with_current_rule():
+    # 기록 당시 grade가 무엇이었든 답 원본에서 지금 규칙으로 다시 정한다
+    record = {
+        "eval_set": "B_aug", "photo": "a.jpg", "place": "황리단길", "category": "음식", "truth": "success",
+        "model": "qwen", "format": "question", "parsed": True, "grade": "fail",
+        "answer": {"judgeable": "yes", "target": "enough", "condition": "yes", "place": "unknown"},
+    }
+    [case] = from_b([record])
+    assert case.match_score is None
+    assert case.format == "question"
+    assert classify(case) == "TP"
+
+
+def test_results_of_different_models_or_formats_are_not_mixed():
+    # 같은 사진이면 하나만 남기므로, 섞어 넣으면 한 모델 결과가 조용히 사라진다
+    assert mixed_runs([_case(model="pro"), _case(model="pro")]) is None
+    assert mixed_runs([_case(model="pro"), _case(model="qwen")]) is not None
+    assert mixed_runs([_case(model="qwen"), _case(model="qwen", format="question")]) is not None
+
+
+def test_answer_counts_as_judged_when_deduping():
+    # 에러 줄 뒤에 다시 잰 객관식 결과가 붙으면 다시 잰 결과를 쓴다
+    out = dedupe([_case(score=None, format="question"), _case(score=None, format="question", answer=_answer())])
+    assert [c.answer is not None for c in out] == [True]
+
+
+SPLIT = pathlib.Path("eval_split.json")
+
+
+@pytest.mark.parametrize(
+    ("split", "split_file", "open_final", "needs_split", "blocked"),
+    [
+        ("dev", SPLIT, False, True, False),
+        ("final", SPLIT, False, True, True),  # final은 확인 옵션 없이 못 연다
+        ("final", SPLIT, True, True, False),
+        (None, None, False, True, True),  # 나누기 없는 전체 집계도 final이 섞여 막는다
+        (None, None, True, True, False),
+        (None, None, False, False, False),  # 평가셋 A만 볼 때는 나누기가 없다
+        ("dev", None, False, True, True),  # 둘 중 하나만 주면 막는다
+        (None, SPLIT, False, True, True),
+    ],
+)
+def test_final_is_locked_unless_opened_on_purpose(split, split_file, open_final, needs_split, blocked):
+    assert (split_error(split, split_file, open_final, needs_split) is not None) == blocked

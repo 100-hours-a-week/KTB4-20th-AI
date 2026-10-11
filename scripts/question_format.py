@@ -8,7 +8,7 @@
 import json
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 Grade = Literal["success", "retry", "fail"]
 
@@ -43,10 +43,20 @@ QUESTION_SYSTEM_PROMPT = """\
 
 
 class QuestionAnswer(BaseModel):
+    # 네 칸 모두 필수(값은 null 가능)다. 응답 스키마로 쓰면 서버가 칸을 빼먹지 못하게 막는다
     judgeable: Literal["yes", "no"]
-    target: Literal["enough", "short", "none"] | None = None
-    condition: Literal["yes", "no", "na"] | None = None
-    place: Literal["yes", "no", "unknown", "na"] | None = None
+    target: Literal["enough", "short", "none"] | None
+    condition: Literal["yes", "no", "na"] | None
+    place: Literal["yes", "no", "unknown", "na"] | None
+
+    @model_validator(mode="after")
+    def _answered_what_can_be_asked(self) -> "QuestionAnswer":
+        # 물을 수 있는 질문이 null이면 rule_grade가 아무 조건에도 안 걸려 "성공"이 된다. 형식 오류로 막는다
+        if self.judgeable == "yes" and (self.target is None or self.place is None):
+            raise ValueError("판단 가능인데 대상·장소 답이 비어 있음")
+        if self.target in ("enough", "short") and self.condition is None:
+            raise ValueError("대상이 있는데 조건 답이 비어 있음")
+        return self
 
 
 def rule_grade(a: QuestionAnswer) -> Grade:
@@ -61,7 +71,7 @@ def normalize(label: dict) -> QuestionAnswer:
     # 표시 화면의 q1~q4를 학습 형식으로 바꾼다. 물을 수 없는 질문은 null로 맞춘다
     # (1차 파일럿 화면은 대상이 없어도 Q3를 물어서 답이 갈렸다)
     if label["q1"] == "no":
-        return QuestionAnswer(judgeable="no")
+        return QuestionAnswer(judgeable="no", target=None, condition=None, place=None)
     if label.get("q2") is None or label.get("q4") is None:
         # 그대로 두면 rule_grade가 아무 조건에도 안 걸려 "성공"이 된다. 틀린 정답이 조용히 들어가지 않게 멈춘다
         raise ValueError(f"판단 가능인데 Q2·Q4 답이 비어 있음: {label.get('mission_id')}")

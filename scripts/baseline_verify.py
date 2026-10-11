@@ -41,6 +41,7 @@ from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import _haversine_km, normalize_image
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
 from app.photomissions.schemas import Coordinates, VlmResult
+from scripts.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer, rule_grade
 
 LANDMARKS = {
     "대릉원": Coordinates(latitude=35.8384, longitude=129.2118),
@@ -165,8 +166,21 @@ def vlm_fields(vlm: VlmResult) -> dict:
     }
 
 
-async def judge(case: dict, image_bytes: bytes) -> dict:
+def question_fields(answer: QuestionAnswer) -> dict:
+    # 객관식 답 원본을 남겨야 나중에 등급 규칙을 바꿔도 다시 호출하지 않고 다시 셀 수 있다. grade는 기록 시점 규칙으로 정한 참고값
+    return {"answer": answer.model_dump(), "grade": rule_grade(answer)}
+
+
+# 판정 형식별 (지시문, 응답 스키마, 기록할 칸). score = 지금 서비스(점수), question = 개선 ② 객관식(학습 데이터와 같은 지시문)
+FORMATS = {
+    "score": (VERIFY_SYSTEM_PROMPT, VlmResult, vlm_fields),
+    "question": (QUESTION_SYSTEM_PROMPT, QuestionAnswer, question_fields),
+}
+
+
+async def judge(case: dict, image_bytes: bytes, fmt: str = "score") -> dict:
     # score_photo와 같은 입력으로 1번만 호출한다. 재시도하지 않아야 1차 성공률과 1회 비용을 그대로 잴 수 있다
+    system_prompt, schema, fields = FORMATS[fmt]
     t0 = time.perf_counter()
     processed = normalize_image(image_bytes)
     t1 = time.perf_counter()
@@ -175,9 +189,9 @@ async def judge(case: dict, image_bytes: bytes) -> dict:
         types.Part.from_bytes(data=processed, mime_type="image/jpeg"),
     ]
     config = types.GenerateContentConfig(
-        system_instruction=VERIFY_SYSTEM_PROMPT,
+        system_instruction=system_prompt,
         response_mime_type="application/json",
-        response_schema=VlmResult,
+        response_schema=schema,
     )
     record = {"normalize_sec": round(t1 - t0, 3), "resized_bytes": len(processed), "original_bytes": len(image_bytes)}
     try:
@@ -196,15 +210,18 @@ async def judge(case: dict, image_bytes: bytes) -> dict:
     record.update(
         prompt_tokens=prompt, image_tokens=image_tokens, output_tokens=output, thought_tokens=thoughts,
         cost_usd=round(prompt * input_per_m / 1e6 + (output + thoughts) * output_per_m / 1e6, 6),
-        parsed=isinstance(response.parsed, VlmResult),
+        parsed=isinstance(response.parsed, schema),
     )
-    if isinstance(response.parsed, VlmResult):
-        record.update(vlm_fields(response.parsed))
+    if isinstance(response.parsed, schema):
+        record.update(fields(response.parsed))
     return record
 
 
-async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str, api_key: str = "") -> dict:
+async def judge_local(
+    case: dict, image_bytes: bytes, base_url: str, model: str, api_key: str = "", fmt: str = "score"
+) -> dict:
     # judge와 같은 프롬프트·리사이즈·응답 형식으로 OpenAI 호환 서버를 1번 부른다. 비용은 GPU 시간으로 따로 계산하므로 0으로 적는다
+    system_prompt, schema, fields = FORMATS[fmt]
     t0 = time.perf_counter()
     processed = normalize_image(image_bytes)
     t1 = time.perf_counter()
@@ -212,7 +229,7 @@ async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str,
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": VERIFY_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": [
                 {"type": "text", "text": user_text(case)},
                 {"type": "image_url", "image_url": {"url": image_url}},
@@ -221,7 +238,7 @@ async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str,
         # Gemini의 response_schema와 같은 역할. 서버가 이 스키마 모양으로만 답하게 막는다
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"name": "VlmResult", "schema": VlmResult.model_json_schema()},
+            "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema()},
         },
     }
     record = {"normalize_sec": round(t1 - t0, 3), "resized_bytes": len(processed), "original_bytes": len(image_bytes)}
@@ -245,7 +262,7 @@ async def judge_local(case: dict, image_bytes: bytes, base_url: str, model: str,
         output_tokens=usage.get("completion_tokens", 0), thought_tokens=0, cost_usd=0.0,
     )
     try:
-        record.update(parsed=True, **vlm_fields(VlmResult.model_validate_json(content)))
+        record.update(parsed=True, **fields(schema.model_validate_json(content)))
     except ValidationError:
         # 스키마를 벗어난 응답은 1차 실패로 센다. 원인을 보려고 앞부분만 남긴다
         record.update(parsed=False, raw=content[:500])
