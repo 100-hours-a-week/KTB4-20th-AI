@@ -25,6 +25,45 @@ from scripts.question_format import normalize, rule_grade, to_example
 DATASET_NAME = "photomission_pilot"
 
 
+def load_missions(lines: list[str]) -> dict[str, dict]:
+    missions = {}
+    for line in lines:
+        if not line.strip():
+            continue
+        m = json.loads(line)
+        if "error" not in m:  # 다시 만들다 에러 난 줄이 앞의 정상 미션을 덮어쓰지 않게 한다
+            missions[m["mission_id"]] = m  # 같은 미션을 다시 만들었으면 마지막 정상 기록을 쓴다
+    return missions
+
+
+def merge_labels(files: list[list[dict]]) -> list[dict]:
+    # 같은 미션이 두 번 표시돼 있으면 학습 데이터에 두 번 들어간다. 어느 쪽이 맞는지는 사람이 정해야 해서 멈춘다
+    labels = [x for items in files for x in items]
+    dup = sorted(k for k, n in Counter(x["mission_id"] for x in labels).items() if n > 1)
+    if dup:
+        raise ValueError(f"같은 미션을 두 번 표시함 {len(dup)}개 (예: {dup[:3]}). 표시 파일을 정리할 것")
+    return labels
+
+
+def select(labels: list[dict], missions: dict[str, dict]) -> tuple[list[tuple[dict, dict]], Counter]:
+    # 학습에 쓸 (표시, 미션) 쌍과 뺀 이유별 개수
+    missing = [x["mission_id"] for x in labels if x.get("final_grade") and x["mission_id"] not in missions]
+    if missing:
+        raise ValueError(f"표시는 있는데 미션 파일에 없는 미션 {len(missing)}개 (예: {missing[:3]}). --pilot-dir를 확인할 것")
+    kept, skipped = [], Counter()
+    for label in labels:
+        if not label.get("final_grade"):
+            skipped["표시 안 함"] += 1
+        elif label["final_grade"] == "unclear":
+            skipped["미션 애매"] += 1
+        elif rule_grade(normalize(label)) != label["final_grade"]:
+            # 사람이 규칙과 다르게 정한 사진은 객관식 답만으로 등급이 재현되지 않아 이번에는 뺀다 (파일럿에서는 0건)
+            skipped["규칙과 다른 등급"] += 1
+        else:
+            kept.append((label, missions[label["mission_id"]]))
+    return kept, skipped
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--aihub", type=pathlib.Path, required=True)
@@ -38,28 +77,17 @@ def main() -> None:
         path = args.pilot_dir / name
         if path.exists():
             rows |= {r["photo"]: r for r in map(json.loads, path.read_text(encoding="utf-8").splitlines())}
-    missions = {}
-    for line in (args.pilot_dir / "missions.jsonl").read_text(encoding="utf-8").splitlines():
-        m = json.loads(line)
-        if "error" not in m:  # 다시 만들다 에러 난 줄이 앞의 정상 미션을 덮어쓰지 않게 한다
-            missions[m["mission_id"]] = m  # 같은 미션을 다시 만들었으면 마지막 정상 기록을 쓴다
-    labels = [x for path in args.labels for x in json.loads(path.read_text(encoding="utf-8"))["items"]]
+    missions = load_missions((args.pilot_dir / "missions.jsonl").read_text(encoding="utf-8").splitlines())
+    try:
+        labels = merge_labels([json.loads(p.read_text(encoding="utf-8"))["items"] for p in args.labels])
+        kept, skipped = select(labels, missions)
+    except ValueError as e:
+        ap.error(str(e))
 
     (args.out_dir / "images").mkdir(parents=True, exist_ok=True)
     zips: dict[str, zipfile.ZipFile] = {}
-    examples, index, skipped, grades, sources = [], [], Counter(), Counter(), Counter()
-    for label in labels:
-        if not label.get("final_grade"):
-            skipped["표시 안 함"] += 1
-            continue
-        if label["final_grade"] == "unclear":
-            skipped["미션 애매"] += 1
-            continue
-        mission = missions[label["mission_id"]]
-        if rule_grade(normalize(label)) != label["final_grade"]:
-            # 사람이 규칙과 다르게 정한 사진은 객관식 답만으로 등급이 재현되지 않아 이번에는 뺀다 (파일럿에서는 0건)
-            skipped["규칙과 다른 등급"] += 1
-            continue
+    examples, index, grades, sources = [], [], Counter(), Counter()
+    for label, mission in kept:
         image_path = args.out_dir / "images" / label["photo"]
         if not image_path.exists():
             row = rows[label["photo"]]
