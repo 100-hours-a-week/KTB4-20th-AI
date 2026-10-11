@@ -1,7 +1,7 @@
 # 포토미션 verify 학습 시험 (2026-10-13 Pod). 목적은 성능이 아니라 학습이 끝까지 돌아가는지 확인하는 것
 # 데이터: scripts/build_train_dataset.py가 만든 파일럿 56개 (객관식 형식, scripts/question_format.py)
 # 실행: llamafactory-cli train scripts/train/qwen2_5vl_lora_smoke.yaml
-# 매개변수 이름은 LLaMA-Factory 버전마다 다를 수 있다. Pod에서 llamafactory-cli version으로 확인하고 맞출 것
+# 매개변수 이름·데이터 형식은 LLaMA-Factory 커밋 1fded91(0.9.6.dev0)의 소스와 대조해 확인함(2026-10-11). Pod에서도 이 커밋으로 설치할 것
 
 ### 모델
 model_name_or_path: Qwen/Qwen2.5-VL-7B-Instruct
