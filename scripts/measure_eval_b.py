@@ -30,14 +30,15 @@ from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import to_grade
 from scripts.baseline_verify import (
     DEFAULT_LOCAL_URL,
-    FORMATS,
     PRICES,
+    add_format_args,
     is_openai_compat,
     judge,
     judge_local,
+    out_conflict,
 )
-from scripts.eval_cases import load_split, split_error
 from scripts.question_format import QuestionAnswer, rule_grade
+from scripts.split_eval import load_split, split_error
 
 SETS = ("B", "B_aug")
 
@@ -72,15 +73,6 @@ def case_key(case: dict) -> str:
     return f"{case['eval_set']}|{case['photo']}"
 
 
-def out_conflict(records: list[dict], model: str, fmt: str) -> str | None:
-    # 이미 기록한 사진은 건너뛰므로, 다른 모델·형식 파일에 이어 쓰면 두 결과가 한 파일에 조용히 섞인다
-    # format 칸이 없는 예전 기록은 점수 형식이다
-    found = {(r["model"], r.get("format", "score")) for r in records}
-    if found - {(model, fmt)}:
-        return f"결과 파일에 다른 모델·형식 기록이 있음 {sorted(found)}. 이번 실행({model}, {fmt})은 --out을 따로 쓸 것"
-    return None
-
-
 def record_grade(record: dict) -> str:
     # 객관식 기록은 답 원본에서 지금 규칙으로 다시 정한다 (eval_cases와 같은 방식)
     if record.get("answer"):
@@ -113,10 +105,7 @@ async def main() -> None:
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--model", default=gemini_client.MODEL_NAME, help="Gemini 모델 이름, 또는 OpenAI 호환 서버의 모델 이름")
     ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="OpenAI 호환 서버 주소 (로컬 Ollama 또는 RunPod)")
-    ap.add_argument("--format", choices=tuple(FORMATS), default="score", help="score = 지금 서비스(점수), question = 객관식")
-    ap.add_argument("--split-file", type=pathlib.Path, help="개선용·최종용 나누기 결과 (eval_split.json)")
-    ap.add_argument("--split", choices=("dev", "final"), help="이쪽 사진만 모델에 보낸다")
-    ap.add_argument("--open-final", action="store_true", help="final 사진도 보낸다 (--split final 또는 나누기 없이). 출시 판단 때만")
+    add_format_args(ap)
     args = ap.parse_args()
     # 끝의 요약도 final이 섞이지 않게, 형식과 상관없이 나누기를 요구한다
     if error := split_error(args.split, args.split_file, args.open_final, needs_split=True):

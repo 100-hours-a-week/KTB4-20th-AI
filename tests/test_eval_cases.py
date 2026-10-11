@@ -14,9 +14,9 @@ from scripts.eval_cases import (
     load_relabel,
     metrics,
     mixed_runs,
-    split_error,
 )
 from scripts.question_format import QuestionAnswer
+from scripts.split_eval import split_error
 
 
 def _case(truth="success", score=95.0, case_type="target_place", **kw):

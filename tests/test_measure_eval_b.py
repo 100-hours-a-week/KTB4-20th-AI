@@ -1,5 +1,10 @@
-from scripts.baseline_verify import auth_headers, is_openai_compat, user_text
-from scripts.measure_eval_b import build_cases, case_key, out_conflict, record_grade
+from scripts.baseline_verify import (
+    auth_headers,
+    is_openai_compat,
+    out_conflict,
+    user_text,
+)
+from scripts.measure_eval_b import build_cases, case_key, record_grade
 
 
 def _row(photo, place="황리단길"):

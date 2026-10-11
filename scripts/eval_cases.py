@@ -18,7 +18,7 @@ Positive = "성공" 판정이다. 사람 정답과 모델 등급을 비교해 �
       --relabel /Volumes/T7/aihub/relabel/relabel_labels.json \\
       --split-file /Volumes/T7/aihub/eval_split.json --split dev
 
-  B·B 보강 결과는 --split을 꼭 줘야 한다. final(최종용)은 출시 판단 때 한 번만 열기로 해서
+  A·B·B 보강 결과는 --split을 꼭 줘야 한다 (나누기는 A·B를 합쳐 여행 단위로 했다). final(최종용)은 출시 판단 때 한 번만 열기로 해서
   --split final이나 나누기 없는 전체 집계는 --open-final을 같이 줄 때만 돈다.
   객관식(--format question) 결과는 점수 대신 답 원본(answer)에서 등급 규칙(rule_grade)으로 등급을 다시 정한다.
 """
@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from app.photomissions.pipeline_verify import RETRY_THRESHOLD, SUCCESS_THRESHOLD
 from scripts.baseline_verify import LOOKALIKE
 from scripts.question_format import QuestionAnswer, rule_grade
+from scripts.split_eval import load_split, split_error
 
 Grade = Literal["success", "retry", "fail"]
 Outcome = Literal["TP", "TN", "FN_LIGHT", "FN_HEAVY", "FP_LIGHT", "FP", "FP_CRITICAL"]
@@ -185,24 +186,8 @@ def apply_relabel(cases: list[EvalCase], relabel: dict[tuple[str, str], str]) ->
     return out
 
 
-def load_split(path: pathlib.Path, side: str) -> set[str]:
-    # split_eval.py가 만든 eval_split.json에서 한쪽(dev 또는 final)의 사진 이름을 읽는다
-    return set(json.loads(path.read_text(encoding="utf-8"))["photos"][side])
-
-
 def apply_split(cases: list[EvalCase], photos: set[str]) -> list[EvalCase]:
     return [c for c in cases if c.photo in photos]
-
-
-def split_error(split: str | None, split_file: pathlib.Path | None, open_final: bool, needs_split: bool) -> str | None:
-    # final을 실수로 보지 않게 막는다. measure_eval_b도 같은 검사를 쓴다. 문제가 없으면 None
-    if bool(split) != bool(split_file):
-        return "--split과 --split-file은 같이 써야 함"
-    if split == "final" and not open_final:
-        return "final은 출시 판단 때 한 번만 연다. 정말 열 때만 --open-final을 같이 줄 것"
-    if needs_split and not split and not open_final:
-        return "B·B 보강은 --split dev로 dev만 볼 것. 나누기 없는 전체 집계는 final이 섞여 --open-final이 필요함"
-    return None
 
 
 def mixed_runs(cases: list[EvalCase]) -> str | None:
@@ -258,7 +243,7 @@ def main() -> None:
     args = ap.parse_args()
     if args.a and not args.a_labels:
         ap.error("--a를 쓰려면 --a-labels가 필요함")
-    if error := split_error(args.split, args.split_file, args.open_final, needs_split=bool(args.b)):
+    if error := split_error(args.split, args.split_file, args.open_final, needs_split=bool(args.a or args.b)):
         ap.error(error)
 
     cases: list[EvalCase] = []

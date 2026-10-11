@@ -23,6 +23,7 @@ CLEAR_MISMATCH_KM)을 정하고 2단계 baseline 지표(latency·구조화 출�
 import argparse
 import asyncio
 import base64
+import collections
 import functools
 import json
 import os
@@ -42,6 +43,7 @@ from app.photomissions.pipeline_verify import _haversine_km, normalize_image
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
 from app.photomissions.schemas import Coordinates, VlmResult
 from scripts.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer, rule_grade
+from scripts.split_eval import load_split, split_error
 
 LANDMARKS = {
     "대릉원": Coordinates(latitude=35.8384, longitude=129.2118),
@@ -178,6 +180,23 @@ FORMATS = {
 }
 
 
+def out_conflict(records: list[dict], model: str, fmt: str) -> str | None:
+    # 이미 기록한 사진은 건너뛰므로, 다른 모델·형식 파일에 이어 쓰면 두 결과가 한 파일에 조용히 섞인다
+    # format 칸이 없는 예전 기록은 점수 형식이다
+    found = {(r["model"], r.get("format", "score")) for r in records}
+    if found - {(model, fmt)}:
+        return f"결과 파일에 다른 모델·형식 기록이 있음 {sorted(found)}. 이번 실행({model}, {fmt})은 --out을 따로 쓸 것"
+    return None
+
+
+def add_format_args(ap: argparse.ArgumentParser) -> None:
+    # baseline_verify(평가셋 A)·measure_eval_b(B·B 보강)가 같은 옵션을 쓴다
+    ap.add_argument("--format", choices=tuple(FORMATS), default="score", help="score = 지금 서비스(점수), question = 객관식")
+    ap.add_argument("--split-file", type=pathlib.Path, help="개선용·최종용 나누기 결과 (eval_split.json)")
+    ap.add_argument("--split", choices=("dev", "final"), help="이쪽 사진만 모델에 보낸다")
+    ap.add_argument("--open-final", action="store_true", help="final 사진도 보낸다 (--split final 또는 나누기 없이). 출시 판단 때만")
+
+
 async def judge(case: dict, image_bytes: bytes, fmt: str = "score") -> dict:
     # score_photo와 같은 입력으로 1번만 호출한다. 재시도하지 않아야 1차 성공률과 1회 비용을 그대로 잴 수 있다
     system_prompt, schema, fields = FORMATS[fmt]
@@ -277,12 +296,18 @@ def summarize(out: pathlib.Path) -> None:
         return
     parsed = [r for r in ok if r.get("parsed")]
     print(f"  구조화 출력 1차 성공률: {len(parsed)}/{len(ok)}")
+    if any("answer" in r for r in parsed):
+        # 객관식 기록은 점수가 없다. 등급 분포만 본다
+        for kind in ("positive", "negative"):
+            grades = collections.Counter(rule_grade(QuestionAnswer.model_validate(r["answer"])) for r in parsed if r["kind"] == kind)
+            if grades:
+                print(f"  {kind} 등급: {dict(grades)}")
     secs = sorted(r["model_sec"] for r in ok)
     p95 = secs[min(len(secs) - 1, int(len(secs) * 0.95))]
     print(f"  모델 호출 시간: 평균 {statistics.mean(secs):.2f}초 / p95 {p95:.2f}초")
     print(f"  총 비용: ${sum(r['cost_usd'] for r in ok):.4f}")
     for kind in ("positive", "negative"):
-        scores = [r["match_score"] for r in parsed if r["kind"] == kind]
+        scores = [r["match_score"] for r in parsed if r["kind"] == kind and "match_score" in r]
         if scores:
             print(f"  {kind} match_score: 평균 {statistics.mean(scores):.1f} / 최소 {min(scores)} / 최대 {max(scores)} ({len(scores)}건)")
 
@@ -302,7 +327,11 @@ async def main() -> None:
     ap.add_argument("--same-as", type=pathlib.Path, help="이 결과 파일에서 성공한 건과 같은 사진·미션만 호출")
     ap.add_argument("--lookalike-only", action="store_true", help="월정교↔동궁과월지 오답 미션만 호출")
     ap.add_argument("--all-negatives", action="store_true", help="사진마다 나머지 장소 미션을 모두 만든다 (기본은 1개)")
+    add_format_args(ap)
     args = ap.parse_args()
+    # 평가셋 A도 개선용·최종용으로 나뉘어 있다. 끝의 요약에 final이 섞이지 않게 나누기를 요구한다
+    if error := split_error(args.split, args.split_file, args.open_final, needs_split=True):
+        ap.error(error)
     if args.same_as and args.same_as.resolve() == args.out.resolve():
         ap.error("--same-as와 --out은 다른 파일이어야 함")
     local = is_openai_compat(args.model)
@@ -318,16 +347,22 @@ async def main() -> None:
         base = [json.loads(line) for line in args.same_as.read_text(encoding="utf-8").splitlines() if line.strip()]
         keep = {case_key(r) for r in base if "error" not in r}
         cases = [c for c in cases if case_key(c) in keep]
-    done = set()
+    if args.split:
+        photos = load_split(args.split_file, args.split)
+        cases = [c for c in cases if c["photo"] in photos]
+    records = []
     if args.out.exists():
         records = [json.loads(line) for line in args.out.read_text(encoding="utf-8").splitlines() if line.strip()]
-        done = {case_key(r) for r in records if "error" not in r}
+    if error := out_conflict(records, args.model, args.format):
+        ap.error(error)
+    done = {case_key(r) for r in records if "error" not in r}
     todo = [c for c in cases if case_key(c) not in done]
     if args.max_calls:
         todo = todo[: args.max_calls]
 
     key_note = "키 있음" if settings.vlm_api_key else "키 없음"  # 키 값은 출력하지 않는다
-    print(f"모델: {gemini_client.MODEL_NAME}" + (f" (OpenAI 호환, {args.base_url}, {key_note})" if local else ""))
+    print(f"모델: {gemini_client.MODEL_NAME}" + (f" (OpenAI 호환, {args.base_url}, {key_note})" if local else "")
+          + f" · 형식 {args.format}" + (f" · {args.split}만" if args.split else ""))
     print(f"매핑 {len(rows)}장 중 찾은 사진 {sum(r['photo'] in index for r in rows)}장")
     for place in LANDMARKS:
         n = sum(1 for c in cases if c["place"] == place)
@@ -349,20 +384,21 @@ async def main() -> None:
             try:
                 image_bytes = read_photo(index[case["photo"]])
                 if local:
-                    record = await judge_local(case, image_bytes, args.base_url, args.model, settings.vlm_api_key)
+                    record = await judge_local(
+                        case, image_bytes, args.base_url, args.model, settings.vlm_api_key, args.format)
                 else:
-                    record = await judge(case, image_bytes)
+                    record = await judge(case, image_bytes, args.format)
             except Exception as e:  # noqa: BLE001 — 사진 하나가 깨져도 전체 실행을 멈추지 않는다
                 record = {"model_sec": 0.0, "error": f"사진 처리 실패 {type(e).__name__}: {e}"}
             distance = _haversine_km(case["photo_coords"], LANDMARKS[case["target"]]) if case["photo_coords"] else None
             line = {
                 "photo": case["photo"], "place": case["place"], "kind": case["kind"], "target": case["target"],
                 "distance_km": round(distance, 3) if distance is not None else None, "model": gemini_client.MODEL_NAME,
-                **record,
+                "format": args.format, **record,
             }
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
             f.flush()
-            score = line.get("match_score", line.get("error", "-"))
+            score = line.get("match_score", line.get("grade", line.get("error", "-")))
             print(f"[{i}/{len(todo)}] {case['photo']} → {case['target']} [{case['kind']}]: {score} ({line['model_sec']}초)")
     summarize(args.out)
 

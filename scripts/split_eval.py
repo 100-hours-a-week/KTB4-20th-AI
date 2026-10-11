@@ -35,6 +35,22 @@ class EvalPhoto(BaseModel):
     stratum: str  # 비율을 맞출 묶음. "A" 또는 "B:카테고리"
 
 
+def load_split(path: pathlib.Path, side: str) -> set[str]:
+    # split_eval.py가 만든 eval_split.json에서 한쪽(dev 또는 final)의 사진 이름을 읽는다
+    return set(json.loads(path.read_text(encoding="utf-8"))["photos"][side])
+
+
+def split_error(split: str | None, split_file: pathlib.Path | None, open_final: bool, needs_split: bool) -> str | None:
+    # final을 실수로 보지 않게 막는다. 측정(baseline_verify·measure_eval_b)과 집계(eval_cases)가 같은 검사를 쓴다. 문제가 없으면 None
+    if bool(split) != bool(split_file):
+        return "--split과 --split-file은 같이 써야 함"
+    if split == "final" and not open_final:
+        return "final은 출시 판단 때 한 번만 연다. 정말 열 때만 --open-final을 같이 줄 것"
+    if needs_split and not split and not open_final:
+        return "평가셋은 --split dev로 dev만 볼 것. 나누기 없이 전체를 보면 final이 섞여 --open-final이 필요함"
+    return None
+
+
 def _gap(dev: collections.Counter, seen: collections.Counter, strata: collections.Counter, ratio: float) -> float:
     # 이 여행이 닿는 묶음마다 "지금까지 넣은 사진 중 개선용 수"가 목표에서 얼마나 벗어났는지
     return sum((dev[s] - ratio * seen[s]) ** 2 for s in strata)
