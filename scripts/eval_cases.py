@@ -14,7 +14,13 @@ Positive = "성공" 판정이다. 사람 정답과 모델 등급을 비교해 �
       --a /Volumes/T7/aihub/278_동부권/baseline/pro-preview_default.jsonl \\
       --a /Volumes/T7/aihub/278_동부권/baseline/pro-preview_lookalike100.jsonl \\
       --a-labels /Volumes/T7/aihub/labeling/gyeongju_labels.json \\
-      --b /Volumes/T7/aihub/eval_b/results/pro_B.jsonl
+      --b /Volumes/T7/aihub/eval_b/results/pro_B.jsonl \\
+      --relabel /Volumes/T7/aihub/relabel/relabel_labels.json \\
+      --split-file /Volumes/T7/aihub/eval_split.json --split dev
+
+  A·B·B 보강 결과는 --split을 꼭 줘야 한다 (나누기는 A·B를 합쳐 여행 단위로 했다). final(최종용)은 출시 판단 때 한 번만 열기로 해서
+  --split final이나 나누기 없는 전체 집계는 --open-final을 같이 줄 때만 돈다.
+  객관식(--format question) 결과는 점수 대신 답 원본(answer)에서 등급 규칙(rule_grade)으로 등급을 다시 정한다.
 """
 
 import argparse
@@ -27,6 +33,8 @@ from pydantic import BaseModel
 
 from app.photomissions.pipeline_verify import RETRY_THRESHOLD, SUCCESS_THRESHOLD
 from scripts.baseline_verify import LOOKALIKE
+from scripts.question_format import QuestionAnswer, rule_grade
+from scripts.split_eval import load_split, split_error
 
 Grade = Literal["success", "retry", "fail"]
 Outcome = Literal["TP", "TN", "FN_LIGHT", "FN_HEAVY", "FP_LIGHT", "FP", "FP_CRITICAL"]
@@ -43,6 +51,12 @@ class EvalCase(BaseModel):
     truth: Grade  # 사람 정답
     model: str
     match_score: float | None  # 모델이 답하지 못했으면(에러·형식 불일치) None
+    format: Literal["score", "question"] = "score"  # 측정 형식. 예전 기록에는 칸이 없어 점수 형식이다
+    answer: QuestionAnswer | None = None  # 객관식 형식으로 잰 결과. 있으면 점수 대신 이걸로 등급을 정한다
+
+    @property
+    def judged(self) -> bool:
+        return self.match_score is not None or self.answer is not None
 
 
 def grade(score: float, success: float = SUCCESS_THRESHOLD, retry: float = RETRY_THRESHOLD) -> Grade:
@@ -52,16 +66,26 @@ def grade(score: float, success: float = SUCCESS_THRESHOLD, retry: float = RETRY
     return "retry" if score >= retry else "fail"
 
 
-def classify(case: EvalCase, success: float = SUCCESS_THRESHOLD, retry: float = RETRY_THRESHOLD) -> Outcome | None:
+def predicted_grade(case: EvalCase, success: float = SUCCESS_THRESHOLD, retry: float = RETRY_THRESHOLD) -> Grade | None:
+    # 객관식 결과는 기준 점수(success·retry)와 무관하게 등급 규칙으로 정한다
+    if case.answer is not None:
+        return rule_grade(case.answer)
     if case.match_score is None:
+        return None
+    return grade(case.match_score, success, retry)
+
+
+def classify(case: EvalCase, success: float = SUCCESS_THRESHOLD, retry: float = RETRY_THRESHOLD) -> Outcome | None:
+    predicted = predicted_grade(case, success, retry)
+    if predicted is None:
         return None  # 판정 자체가 없으면 오류 종류로 세지 않고 따로 센다
-    passed = grade(case.match_score, success, retry) == "success"
+    passed = predicted == "success"
     if case.case_type != "target_place":
         return "FP_CRITICAL" if passed else "TN"
     if case.truth == "success":
         if passed:
             return "TP"
-        return "FN_LIGHT" if grade(case.match_score, success, retry) == "retry" else "FN_HEAVY"
+        return "FN_LIGHT" if predicted == "retry" else "FN_HEAVY"
     if not passed:
         return "TN"
     return "FP_LIGHT" if case.truth == "retry" else "FP"
@@ -103,6 +127,17 @@ def _score(record: dict) -> float | None:
     return record.get("match_score") if "error" not in record and record.get("parsed") else None
 
 
+def _answer(record: dict) -> QuestionAnswer | None:
+    ok = "error" not in record and record.get("parsed") and record.get("answer")
+    return QuestionAnswer.model_validate(record["answer"]) if ok else None
+
+
+def _judgment(record: dict) -> dict:
+    # A·B 공통: 모델·형식과 판정(점수 또는 객관식 답). format 칸이 없는 예전 기록은 점수 형식이다
+    return {"model": record["model"], "format": record.get("format", "score"),
+            "match_score": _score(record), "answer": _answer(record)}
+
+
 def from_a(records: list[dict], labels: dict[str, Grade]) -> list[EvalCase]:
     # 평가셋 A: 맞는 장소 미션은 사람 정답, 다른 장소 미션은 정답이 항상 실패다
     cases = []
@@ -116,7 +151,7 @@ def from_a(records: list[dict], labels: dict[str, Grade]) -> list[EvalCase]:
             truth = "fail"
         cases.append(EvalCase(
             eval_set="A", photo=r["photo"], place=r["place"], target=r["target"], case_type=case_type,
-            mission_source="landmark_fixed", category="역사·문화", truth=truth, model=r["model"], match_score=_score(r),
+            mission_source="landmark_fixed", category="역사·문화", truth=truth, **_judgment(r),
         ))
     return cases
 
@@ -127,10 +162,46 @@ def from_b(records: list[dict]) -> list[EvalCase]:
         EvalCase(
             eval_set=r["eval_set"], photo=r["photo"], place=r["place"], target=r["place"], case_type="target_place",
             mission_source="generate" if r["eval_set"] == "B" else "photo_written", category=r["category"],
-            truth=r["truth"], model=r["model"], match_score=_score(r),
+            truth=r["truth"], **_judgment(r),
         )
         for r in records
     ]
+
+
+class RelabelItem(BaseModel):
+    # 정답 재표시 화면이 내보낸 relabel_labels.json의 한 줄. 화면 쪽 칸(group·note 등)은 쓰지 않는다
+    eval_set: Literal["A", "B", "B_aug"]
+    photo: str
+    label: Grade | Literal["unclear"] | None = None  # unclear = 미션 애매, None = 아직 안 고름
+
+
+def load_relabel(path: pathlib.Path) -> dict[tuple[str, str], str]:
+    items = [RelabelItem.model_validate(x) for x in json.loads(path.read_text(encoding="utf-8"))["items"]]
+    return {(x.eval_set, x.photo): x.label for x in items if x.label}
+
+
+def apply_relabel(cases: list[EvalCase], relabel: dict[tuple[str, str], str]) -> list[EvalCase]:
+    # 재표시는 사진을 찍은 장소의 미션만 다시 본 것이다. 다른 장소·닮은 장소 미션은 정답이 항상 실패라 그대로 둔다
+    # 미션 애매(unclear)는 미션 자체가 문제라 평가에서 뺀다
+    out = []
+    for c in cases:
+        label = relabel.get((c.eval_set, c.photo)) if c.case_type == "target_place" else None
+        if label == "unclear":
+            continue
+        out.append(c.model_copy(update={"truth": label}) if label else c)
+    return out
+
+
+def apply_split(cases: list[EvalCase], photos: set[str]) -> list[EvalCase]:
+    return [c for c in cases if c.photo in photos]
+
+
+def mixed_runs(cases: list[EvalCase]) -> str | None:
+    # dedupe는 같은 사진을 하나로 합치므로, 모델·형식이 다른 결과를 같이 넣으면 한쪽이 조용히 버려진다
+    runs = sorted({(c.model, c.format) for c in cases})
+    if len(runs) > 1:
+        return f"모델·형식이 다른 결과가 섞여 있음 {runs}. 모델·형식마다 따로 돌려서 표를 나란히 볼 것"
+    return None
 
 
 def dedupe(cases: list[EvalCase]) -> list[EvalCase]:
@@ -139,7 +210,7 @@ def dedupe(cases: list[EvalCase]) -> list[EvalCase]:
     chosen: dict[tuple, EvalCase] = {}
     for c in cases:
         key = (c.eval_set, c.photo, c.target, c.mission_source)
-        if key not in chosen or (chosen[key].match_score is None and c.match_score is not None):
+        if key not in chosen or (not chosen[key].judged and c.judged):
             chosen[key] = c
     return list(chosen.values())
 
@@ -160,7 +231,9 @@ def report(cases: list[EvalCase]) -> None:
         cells = (m["critical_fp_other"], m["critical_fp_lookalike"], m["fp"], m["fp_light"],
                  m["fn_heavy"], m["fn_light"], m["precision"], m["recall"])
         print(f"{name} | {m['judged']} | " + " | ".join(_pct(v) for v in cells))
-    print(f"\n판정 없음(에러·형식 불일치): {sum(c.match_score is None for c in cases)}건")
+    print(f"\n판정 없음(에러·형식 불일치): {sum(not c.judged for c in cases)}건")
+    if any(c.answer is not None for c in cases):
+        print("객관식 결과는 기준 점수(90·40점)와 무관하게 등급 규칙(rule_grade)으로 등급을 정함")
 
 
 def main() -> None:
@@ -168,10 +241,16 @@ def main() -> None:
     ap.add_argument("--a", type=pathlib.Path, action="append", default=[], help="평가셋 A 결과 JSONL (여러 번 가능)")
     ap.add_argument("--a-labels", type=pathlib.Path, help="평가셋 A 사람 정답 (gyeongju_labels.json)")
     ap.add_argument("--b", type=pathlib.Path, action="append", default=[], help="평가셋 B·B 보강 결과 JSONL")
+    ap.add_argument("--relabel", type=pathlib.Path, help="정답 재표시 결과 (relabel_labels.json). 주면 기존 정답 대신 씀")
+    ap.add_argument("--split-file", type=pathlib.Path, help="개선용·최종용 나누기 결과 (eval_split.json)")
+    ap.add_argument("--split", choices=("dev", "final"), help="이쪽 사진만 센다. final은 출시 판단 때 한 번만")
+    ap.add_argument("--open-final", action="store_true", help="final을 연다 (--split final 또는 나누기 없는 전체 집계). 출시 판단 때만")
     ap.add_argument("--out", type=pathlib.Path, help="통합한 EvalCase를 JSONL로 저장 (레포 밖에 둘 것)")
     args = ap.parse_args()
     if args.a and not args.a_labels:
         ap.error("--a를 쓰려면 --a-labels가 필요함")
+    if error := split_error(args.split, args.split_file, args.open_final, needs_split=bool(args.a or args.b)):
+        ap.error(error)
 
     cases: list[EvalCase] = []
     if args.a:
@@ -180,7 +259,16 @@ def main() -> None:
             cases += from_a(_read_jsonl(path), labels)
     for path in args.b:
         cases += from_b(_read_jsonl(path))
+    if error := mixed_runs(cases):
+        ap.error(error)
     cases = dedupe(cases)
+    if args.relabel:
+        before = len(cases)
+        cases = apply_relabel(cases, load_relabel(args.relabel))
+        print(f"재표시 정답 적용 · 미션 애매로 뺀 건 {before - len(cases)}건")
+    if args.split:
+        cases = apply_split(cases, load_split(args.split_file, args.split))
+        print(f"{args.split} 쪽만 셈")
     models = sorted({c.model for c in cases})
     print(f"모델 {models} · 케이스 {len(cases)}건\n")
     report(cases)

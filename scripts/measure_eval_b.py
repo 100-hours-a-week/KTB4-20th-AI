@@ -10,7 +10,12 @@
   uv run python -m scripts.measure_eval_b --aihub /Volumes/T7/aihub --set B \\
       --out /Volumes/T7/aihub/eval_b/results/pro_B.jsonl --max-calls 200
 
-  같은 --out으로 다시 실행하면 이미 기록한 건은 건너뛴다.
+  같은 --out으로 다시 실행하면 이미 기록한 건은 건너뛴다. 모델이나 형식이 다른 파일에 이어 쓰려 하면 멈춘다.
+
+  # Pod의 Qwen(vLLM)을 객관식 형식으로, dev 사진만. final 사진은 모델에 보내지 않는다
+  uv run python -m scripts.measure_eval_b --aihub /Volumes/T7/aihub --set all --format question \\
+      --split-file /Volumes/T7/aihub/eval_split.json --split dev \\
+      --model <서버의 모델 이름> --base-url <Pod 주소>/v1 --out /Volumes/T7/aihub/eval_b/results/<이름>.jsonl
 """
 
 import argparse
@@ -20,15 +25,20 @@ import json
 import pathlib
 import zipfile
 
+from app.core.config import settings
 from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import to_grade
 from scripts.baseline_verify import (
     DEFAULT_LOCAL_URL,
-    LOCAL_MODELS,
     PRICES,
+    add_format_args,
+    is_openai_compat,
     judge,
     judge_local,
+    out_conflict,
 )
+from scripts.question_format import QuestionAnswer, rule_grade
+from scripts.split_eval import load_split, split_error
 
 SETS = ("B", "B_aug")
 
@@ -63,6 +73,13 @@ def case_key(case: dict) -> str:
     return f"{case['eval_set']}|{case['photo']}"
 
 
+def record_grade(record: dict) -> str:
+    # 객관식 기록은 답 원본에서 지금 규칙으로 다시 정한다 (eval_cases와 같은 방식)
+    if record.get("answer"):
+        return rule_grade(QuestionAnswer.model_validate(record["answer"]))
+    return to_grade(record["match_score"])
+
+
 def summarize(out: pathlib.Path) -> None:
     # 등급 일치만 간단히 본다. FP·FN 종류별 집계는 eval_cases 통합 후 오류 분류 함수로 한다
     ok = [r for r in _read_jsonl(out) if "error" not in r and r.get("parsed")]
@@ -71,7 +88,7 @@ def summarize(out: pathlib.Path) -> None:
         rs = [r for r in ok if r["eval_set"] == eval_set]
         if not rs:
             continue
-        table = collections.Counter((r["truth"], to_grade(r["match_score"])) for r in rs)
+        table = collections.Counter((r["truth"], record_grade(r)) for r in rs)
         agree = sum(n for (t, p), n in table.items() if t == p)
         print(f"  {eval_set}: 정답 일치 {agree}/{len(rs)} ({agree / len(rs):.0%})")
         for truth in ("success", "retry", "fail"):
@@ -86,10 +103,14 @@ async def main() -> None:
     ap.add_argument("--out", type=pathlib.Path, required=True, help="결과 JSONL (레포 밖에 둘 것)")
     ap.add_argument("--max-calls", type=int, default=0, help="이번 실행의 최대 호출 수 (0이면 제한 없음)")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--model", default=gemini_client.MODEL_NAME, choices=sorted(PRICES) + list(LOCAL_MODELS))
-    ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="로컬·RunPod 모델의 OpenAI 호환 주소")
+    ap.add_argument("--model", default=gemini_client.MODEL_NAME, help="Gemini 모델 이름, 또는 OpenAI 호환 서버의 모델 이름")
+    ap.add_argument("--base-url", default=DEFAULT_LOCAL_URL, help="OpenAI 호환 서버 주소 (로컬 Ollama 또는 RunPod)")
+    add_format_args(ap)
     args = ap.parse_args()
-    local = args.model in LOCAL_MODELS
+    # 끝의 요약도 final이 섞이지 않게, 형식과 상관없이 나누기를 요구한다
+    if error := split_error(args.split, args.split_file, args.open_final, needs_split=True):
+        ap.error(error)
+    local = is_openai_compat(args.model)
     gemini_client.MODEL_NAME = args.model
 
     eval_b = args.aihub / "eval_b"
@@ -101,13 +122,21 @@ async def main() -> None:
     )
     if args.set != "all":
         cases = [c for c in cases if c["eval_set"] == args.set]
-    done = {case_key(r) for r in _read_jsonl(args.out) if "error" not in r} if args.out.exists() else set()
+    if args.split:
+        photos = load_split(args.split_file, args.split)
+        cases = [c for c in cases if c["photo"] in photos]
+    existing = _read_jsonl(args.out) if args.out.exists() else []
+    if error := out_conflict(existing, args.model, args.format):
+        ap.error(error)
+    done = {case_key(r) for r in existing if "error" not in r}
     todo = [c for c in cases if case_key(c) not in done]
     if args.max_calls:
         todo = todo[: args.max_calls]
 
     counts = collections.Counter(c["eval_set"] for c in cases)
-    print(f"모델: {args.model}" + (f" (OpenAI 호환, {args.base_url})" if local else ""))
+    key_note = "키 있음" if settings.vlm_api_key else "키 없음"  # 키 값은 출력하지 않는다
+    print(f"모델: {args.model}" + (f" (OpenAI 호환, {args.base_url}, {key_note})" if local else "") + f" · 형식 {args.format}"
+          + (f" · {args.split}만" if args.split else ""))
     print(f"케이스 {dict(counts)} (이미 기록 {len(cases) - len([c for c in cases if case_key(c) not in done])}건) → 이번에 호출할 것 {len(todo)}건")
     if not local:
         per_call_won = 27 * PRICES[args.model][0] / PRICES["gemini-3.1-pro-preview"][0]
@@ -124,14 +153,17 @@ async def main() -> None:
             try:
                 zf = zips.setdefault(case["zip"], zipfile.ZipFile(args.aihub / case["zip"]))
                 image = zf.read(case["member"])
-                record = await (judge_local(case, image, args.base_url, args.model) if local else judge(case, image))
+                record = await (
+                    judge_local(case, image, args.base_url, args.model, settings.vlm_api_key, args.format)
+                    if local else judge(case, image, args.format)
+                )
             except Exception as e:  # noqa: BLE001 — 사진 하나가 깨져도 전체 실행을 멈추지 않는다
                 record = {"model_sec": 0.0, "error": f"사진 처리 실패 {type(e).__name__}: {e}"}
             line = {k: case[k] for k in ("eval_set", "photo", "place", "region", "category", "mission", "truth")}
-            line.update(model=args.model, **record)
+            line.update(model=args.model, format=args.format, **record)
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
             f.flush()
-            shown = line.get("match_score", line.get("error", "-"))
+            shown = line.get("match_score", line.get("grade", line.get("error", "-")))
             print(f"[{i}/{len(todo)}] [{case['eval_set']}] {case['place']}: {shown} (정답 {case['truth']}, {line['model_sec']}초)")
     summarize(args.out)
 

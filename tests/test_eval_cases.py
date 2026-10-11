@@ -1,6 +1,22 @@
+import json
+import pathlib
+
 import pytest
 
-from scripts.eval_cases import EvalCase, classify, dedupe, from_a, metrics
+from scripts.eval_cases import (
+    EvalCase,
+    apply_relabel,
+    apply_split,
+    classify,
+    dedupe,
+    from_a,
+    from_b,
+    load_relabel,
+    metrics,
+    mixed_runs,
+)
+from scripts.question_format import QuestionAnswer
+from scripts.split_eval import split_error
 
 
 def _case(truth="success", score=95.0, case_type="target_place", **kw):
@@ -77,3 +93,118 @@ def test_same_case_measured_twice_is_counted_once():
 def test_retried_answer_replaces_earlier_error():
     # 하루 한도(429)로 실패한 줄 뒤에 다시 잰 결과가 붙으면 다시 잰 결과를 쓴다
     assert [c.match_score for c in dedupe([_case(score=None), _case(score=88)])] == [88.0]
+
+
+def test_relabel_replaces_truth_and_drops_unclear():
+    cases = [
+        _case("fail", photo="a.jpg"),
+        _case("success", photo="b.jpg"),
+        _case("fail", photo="c.jpg"),  # 재표시 대상이 아니면 기존 정답 그대로
+    ]
+    relabel = {("B", "a.jpg"): "retry", ("B", "b.jpg"): "unclear"}
+    out = apply_relabel(cases, relabel)
+    assert [(c.photo, c.truth) for c in out] == [("a.jpg", "retry"), ("c.jpg", "fail")]
+
+
+def test_relabel_only_applies_to_target_place_missions():
+    # 재표시는 사진을 찍은 장소의 미션만 다시 본 것이다. 다른 장소·닮은 장소 미션은 정답이 항상 실패다
+    cases = [
+        _case("success", photo="a.jpg", eval_set="A", target="불국사"),
+        _case("fail", photo="a.jpg", eval_set="A", target="석굴암", case_type="other_place"),
+    ]
+    out = apply_relabel(cases, {("A", "a.jpg"): "unclear"})
+    assert [(c.target, c.truth) for c in out] == [("석굴암", "fail")]
+
+
+def test_load_relabel_skips_items_not_yet_labeled(tmp_path):
+    path = tmp_path / "relabel_labels.json"
+    path.write_text(json.dumps({"items": [
+        {"eval_set": "B", "photo": "a.jpg", "label": "retry", "note": ""},
+        {"eval_set": "A", "photo": "b.jpg"},  # 아직 고르지 않은 사진
+    ]}), encoding="utf-8")
+    assert load_relabel(path) == {("B", "a.jpg"): "retry"}
+
+
+def test_split_keeps_only_photos_on_that_side():
+    cases = [_case(photo="a.jpg"), _case(photo="b.jpg")]
+    assert [c.photo for c in apply_split(cases, {"b.jpg"})] == ["b.jpg"]
+
+
+def _answer(target="enough", condition="na", place="yes"):
+    return QuestionAnswer(judgeable="yes", target=target, condition=condition, place=place)
+
+
+def test_question_answer_is_graded_by_rule_without_score():
+    # 객관식 결과에는 점수가 없다. 점수가 없다고 "판정 없음"으로 빠지면 안 되고, 답에서 규칙으로 등급을 정한다
+    assert classify(_case("success", None, answer=_answer())) == "TP"
+    assert classify(_case("success", None, answer=_answer(target="short"))) == "FN_LIGHT"
+    assert classify(_case("success", None, answer=_answer(target="none", condition=None))) == "FN_HEAVY"
+    assert classify(_case("retry", None, answer=_answer())) == "FP_LIGHT"
+    assert metrics([_case("success", None, answer=_answer())])["no_answer"] == 0
+
+
+def test_question_answer_ignores_score_thresholds():
+    # 기준 점수를 바꿔도 객관식 결과는 그대로다 (규칙을 바꿔야 바뀐다)
+    case = _case("success", None, answer=_answer(target="short"))
+    assert classify(case, success=10, retry=5) == "FN_LIGHT"
+
+
+def test_from_b_reads_answer_and_regrades_with_current_rule():
+    # 기록 당시 grade가 무엇이었든 답 원본에서 지금 규칙으로 다시 정한다
+    record = {
+        "eval_set": "B_aug", "photo": "a.jpg", "place": "황리단길", "category": "음식", "truth": "success",
+        "model": "qwen", "format": "question", "parsed": True, "grade": "fail",
+        "answer": {"judgeable": "yes", "target": "enough", "condition": "yes", "place": "unknown"},
+    }
+    [case] = from_b([record])
+    assert case.match_score is None
+    assert case.format == "question"
+    assert classify(case) == "TP"
+
+
+def test_results_of_different_models_or_formats_are_not_mixed():
+    # 같은 사진이면 하나만 남기므로, 섞어 넣으면 한 모델 결과가 조용히 사라진다
+    assert mixed_runs([_case(model="pro"), _case(model="pro")]) is None
+    assert mixed_runs([_case(model="pro"), _case(model="qwen")]) is not None
+    assert mixed_runs([_case(model="qwen"), _case(model="qwen", format="question")]) is not None
+
+
+def test_from_a_reads_answer_too():
+    # 평가셋 A도 객관식으로 잰다. 답을 안 읽으면 점수가 없어 전부 "판정 없음"이 된다
+    answer = {"judgeable": "yes", "target": "none", "condition": None, "place": "no"}
+    records = [
+        {"photo": "a.jpg", "place": "월정교", "kind": "positive", "target": "월정교", "model": "qwen",
+         "format": "question", "parsed": True, "answer": {**answer, "target": "enough", "condition": "na", "place": "yes"}},
+        {"photo": "a.jpg", "place": "월정교", "kind": "negative", "target": "동궁과월지", "model": "qwen",
+         "format": "question", "parsed": True, "answer": answer},
+    ]
+    cases = from_a(records, {"a.jpg": "success"})
+    assert [(c.case_type, c.format, classify(c)) for c in cases] == [
+        ("target_place", "question", "TP"), ("lookalike", "question", "TN"),
+    ]
+
+
+def test_answer_counts_as_judged_when_deduping():
+    # 에러 줄 뒤에 다시 잰 객관식 결과가 붙으면 다시 잰 결과를 쓴다
+    out = dedupe([_case(score=None, format="question"), _case(score=None, format="question", answer=_answer())])
+    assert [c.answer is not None for c in out] == [True]
+
+
+SPLIT = pathlib.Path("eval_split.json")
+
+
+@pytest.mark.parametrize(
+    ("split", "split_file", "open_final", "needs_split", "blocked"),
+    [
+        ("dev", SPLIT, False, True, False),
+        ("final", SPLIT, False, True, True),  # final은 확인 옵션 없이 못 연다
+        ("final", SPLIT, True, True, False),
+        (None, None, False, True, True),  # 나누기 없는 전체 집계도 final이 섞여 막는다
+        (None, None, True, True, False),
+        (None, None, False, False, False),  # 평가셋 A만 볼 때는 나누기가 없다
+        ("dev", None, False, True, True),  # 둘 중 하나만 주면 막는다
+        (None, SPLIT, False, True, True),
+    ],
+)
+def test_final_is_locked_unless_opened_on_purpose(split, split_file, open_final, needs_split, blocked):
+    assert (split_error(split, split_file, open_final, needs_split) is not None) == blocked

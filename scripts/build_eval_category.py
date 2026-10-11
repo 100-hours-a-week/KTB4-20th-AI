@@ -114,8 +114,9 @@ def eval_a_travel_ids(aihub: pathlib.Path) -> set[str]:
 #    - 카테고리·지역·좌표 중 하나라도 없으면 건너뜀
 #    - 통과하면 후보에 추가
 
-def collect_candidates(aihub: pathlib.Path) -> list[dict]:
+def collect_candidates(aihub: pathlib.Path, type_to_category: dict[str, str] = TYPE_TO_CATEGORY) -> list[dict]:
     # 서비스 지역 5곳 × 카테고리 4개에 해당하고, 받은 사진 zip에 실제로 있는 사진만 후보로 만든다
+    # 학습 데이터는 역사·문화도 뽑으므로 type_to_category를 바꿔 넘긴다
     candidates = []
     for dataset, paths in DATASETS.items():
         located: dict[str, tuple[str, str]] = {}  # 파일명 → (사진 zip 경로, zip 안 경로)
@@ -134,7 +135,7 @@ def collect_candidates(aihub: pathlib.Path) -> list[dict]:
             area = areas.get((p["TRAVEL_ID"], p["VISIT_AREA_ID"]))
             if area is None:
                 continue
-            category = TYPE_TO_CATEGORY.get(area["VISIT_AREA_TYPE_CD"])
+            category = type_to_category.get(area["VISIT_AREA_TYPE_CD"])
             region = region_of(area["ROAD_NM_ADDR"] or area["LOTNO_ADDR"] or "")
             place_coords = _coords(area["Y_COORD"], area["X_COORD"])
             # verify는 장소 좌표가 필수라, 좌표가 없는 방문지는 평가에 쓸 수 없어 뺀다
