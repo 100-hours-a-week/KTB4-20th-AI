@@ -132,6 +132,12 @@ def _answer(record: dict) -> QuestionAnswer | None:
     return QuestionAnswer.model_validate(record["answer"]) if ok else None
 
 
+def _judgment(record: dict) -> dict:
+    # A·B 공통: 모델·형식과 판정(점수 또는 객관식 답). format 칸이 없는 예전 기록은 점수 형식이다
+    return {"model": record["model"], "format": record.get("format", "score"),
+            "match_score": _score(record), "answer": _answer(record)}
+
+
 def from_a(records: list[dict], labels: dict[str, Grade]) -> list[EvalCase]:
     # 평가셋 A: 맞는 장소 미션은 사람 정답, 다른 장소 미션은 정답이 항상 실패다
     cases = []
@@ -145,7 +151,7 @@ def from_a(records: list[dict], labels: dict[str, Grade]) -> list[EvalCase]:
             truth = "fail"
         cases.append(EvalCase(
             eval_set="A", photo=r["photo"], place=r["place"], target=r["target"], case_type=case_type,
-            mission_source="landmark_fixed", category="역사·문화", truth=truth, model=r["model"], match_score=_score(r),
+            mission_source="landmark_fixed", category="역사·문화", truth=truth, **_judgment(r),
         ))
     return cases
 
@@ -156,7 +162,7 @@ def from_b(records: list[dict]) -> list[EvalCase]:
         EvalCase(
             eval_set=r["eval_set"], photo=r["photo"], place=r["place"], target=r["place"], case_type="target_place",
             mission_source="generate" if r["eval_set"] == "B" else "photo_written", category=r["category"],
-            truth=r["truth"], model=r["model"], format=r.get("format", "score"), match_score=_score(r), answer=_answer(r),
+            truth=r["truth"], **_judgment(r),
         )
         for r in records
     ]

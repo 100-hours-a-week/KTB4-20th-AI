@@ -169,6 +169,21 @@ def test_results_of_different_models_or_formats_are_not_mixed():
     assert mixed_runs([_case(model="qwen"), _case(model="qwen", format="question")]) is not None
 
 
+def test_from_a_reads_answer_too():
+    # 평가셋 A도 객관식으로 잰다. 답을 안 읽으면 점수가 없어 전부 "판정 없음"이 된다
+    answer = {"judgeable": "yes", "target": "none", "condition": None, "place": "no"}
+    records = [
+        {"photo": "a.jpg", "place": "월정교", "kind": "positive", "target": "월정교", "model": "qwen",
+         "format": "question", "parsed": True, "answer": {**answer, "target": "enough", "condition": "na", "place": "yes"}},
+        {"photo": "a.jpg", "place": "월정교", "kind": "negative", "target": "동궁과월지", "model": "qwen",
+         "format": "question", "parsed": True, "answer": answer},
+    ]
+    cases = from_a(records, {"a.jpg": "success"})
+    assert [(c.case_type, c.format, classify(c)) for c in cases] == [
+        ("target_place", "question", "TP"), ("lookalike", "question", "TN"),
+    ]
+
+
 def test_answer_counts_as_judged_when_deduping():
     # 에러 줄 뒤에 다시 잰 객관식 결과가 붙으면 다시 잰 결과를 쓴다
     out = dedupe([_case(score=None, format="question"), _case(score=None, format="question", answer=_answer())])
