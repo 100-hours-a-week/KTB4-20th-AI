@@ -175,9 +175,14 @@ jobs:
             (.services | length) == 1 and
             (.services[0] |
               .taskDefinition == $task_def and
-              (.deployments | length) == 1 and
-              .deployments[0].taskDefinition == $task_def and
-              .deployments[0].rolloutState == "COMPLETED"
+              (
+                .deployments
+                | map(select(
+                    .taskDefinition == $task_def and
+                    .rolloutState == "COMPLETED"
+                  ))
+                | length
+              ) >= 1
             )
           ' "$RUNNER_TEMP/service.json" > /dev/null || {
             echo "::error::The target task definition did not complete deployment."
