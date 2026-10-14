@@ -175,17 +175,11 @@ jobs:
             (.services | length) == 1 and
             (.services[0] |
               .taskDefinition == $task_def and
-              (
-                .deployments
-                | map(select(
-                    .taskDefinition == $task_def and
-                    .rolloutState == "COMPLETED"
-                  ))
-                | length
-              ) >= 1
+              .runningCount == .desiredCount and
+              .pendingCount == 0
             )
           ' "$RUNNER_TEMP/service.json" > /dev/null || {
-            echo "::error::The target task definition did not complete deployment."
+            echo "::error::The target task definition did not reach a stable running state."
             exit 1
           }
 
