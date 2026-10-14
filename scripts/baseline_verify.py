@@ -42,7 +42,7 @@ from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import _haversine_km, normalize_image
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
 from app.photomissions.schemas import Coordinates, VlmResult
-from scripts.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer, rule_grade
+from scripts.question_format import QUESTION_SYSTEM_PROMPT, QUESTION_SYSTEM_PROMPT_V2, QuestionAnswer, rule_grade
 from scripts.split_eval import load_split, split_error
 
 LANDMARKS = {
@@ -174,9 +174,11 @@ def question_fields(answer: QuestionAnswer) -> dict:
 
 
 # 판정 형식별 (지시문, 응답 스키마, 기록할 칸). score = 지금 서비스(점수), question = 개선 ② 객관식(학습 데이터와 같은 지시문)
+# question_v2 = 장소 질문만 바꾼 객관식 실험. 답 형식·등급 규칙은 question과 같다
 FORMATS = {
     "score": (VERIFY_SYSTEM_PROMPT, VlmResult, vlm_fields),
     "question": (QUESTION_SYSTEM_PROMPT, QuestionAnswer, question_fields),
+    "question_v2": (QUESTION_SYSTEM_PROMPT_V2, QuestionAnswer, question_fields),
 }
 
 
@@ -191,7 +193,7 @@ def out_conflict(records: list[dict], model: str, fmt: str) -> str | None:
 
 def add_format_args(ap: argparse.ArgumentParser) -> None:
     # baseline_verify(평가셋 A)·measure_eval_b(B·B 보강)가 같은 옵션을 쓴다
-    ap.add_argument("--format", choices=tuple(FORMATS), default="score", help="score = 지금 서비스(점수), question = 객관식")
+    ap.add_argument("--format", choices=tuple(FORMATS), default="score", help="score = 지금 서비스(점수), question = 객관식, question_v2 = 장소 질문만 바꾼 객관식")
     ap.add_argument("--split-file", type=pathlib.Path, help="개선용·최종용 나누기 결과 (eval_split.json)")
     ap.add_argument("--split", choices=("dev", "final"), help="이쪽 사진만 모델에 보낸다")
     ap.add_argument("--open-final", action="store_true", help="final 사진도 보낸다 (--split final 또는 나누기 없이). 출시 판단 때만")
