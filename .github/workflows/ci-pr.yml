@@ -38,10 +38,15 @@ jobs:
       - name: Check main PR source
         if: >-
           github.base_ref == 'main' &&
-          (github.head_ref != 'dev' ||
-           github.event.pull_request.head.repo.full_name != github.repository)
+          (
+            github.event.pull_request.head.repo.full_name != github.repository ||
+            (
+              github.head_ref != 'dev' &&
+              github.head_ref != vars.MAIN_PR_EXCEPTION_BRANCH
+            )
+          )
         run: |
-          echo "::error::main에는 같은 저장소의 dev 브랜치에서 PR을 보내야 합니다."
+          echo "::error::main에는 같은 저장소의 dev 또는 승인된 예외 브랜치에서 PR을 보내야 합니다."
           exit 1
 
       - name: Checkout
