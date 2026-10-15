@@ -20,7 +20,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         vlm_client.check_settings(settings)
         vlm_client.start(settings)  # 검사를 통과한 뒤에만 클라이언트를 만든다
     # uvicorn 로그에 같이 찍혀서 켜자마자 지금 어느 모델로 판정하는지 보인다
-    logging.getLogger("uvicorn.error").info(vlm_client.backend_summary(settings))
+    logger = logging.getLogger("uvicorn.error")
+    logger.info(vlm_client.backend_summary(settings))
+    if warning := vlm_client.deadline_warning(settings):
+        logger.warning(warning)
     try:
         yield
     finally:

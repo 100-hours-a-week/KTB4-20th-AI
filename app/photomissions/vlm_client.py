@@ -23,6 +23,9 @@ POOL_TIMEOUT = 2.0
 # TODO: 동시 연결 수는 32번(서버리스 동시성·콜드스타트 측정) 후 확정
 MAX_CONNECTIONS = 20
 DEFAULT_RETRY_AFTER = "30"  # 상대 서버가 Retry-After를 안 주면 Gemini 429와 같은 값을 쓴다
+MAX_RETRY_AFTER = 3600  # 상대 서버가 지나치게 큰 값을 줘도 그대로 넘기지 않는다
+# 백엔드는 AI 서버 응답을 30초까지 기다린다(ADR-0004). 사진 다운로드·축소 시간과 여유를 빼면 마감은 이보다 작아야 한다
+DEADLINE_WARN_SECONDS = 20.0
 # 바깥 안전망은 마감보다 조금 늦게 둔다. 마감 경계에서는 httpx 시간 초과가 먼저 나서 원인별 코드(503·502·504)가 남는다
 # 이벤트 루프가 오래 멈추면 안전망이 먼저 날 수 있고, 그때는 504다
 DEADLINE_GUARD = 0.1
@@ -59,6 +62,16 @@ def settings_errors(s: Settings) -> list[str]:
 def check_settings(s: Settings) -> None:
     if errors := settings_errors(s):
         raise RuntimeError("VERIFY_BACKEND=self 설정 오류: " + " / ".join(errors))
+
+
+def deadline_warning(s: Settings) -> str | None:
+    # 백엔드 읽기 타임아웃(30초)은 AI 서버가 모르는 외부 값이라 시작을 막지 않고 경고만 한다
+    if s.verify_backend == "self" and s.vlm_deadline_seconds is not None and s.vlm_deadline_seconds > DEADLINE_WARN_SECONDS:
+        return (
+            f"VLM_DEADLINE_SECONDS={s.vlm_deadline_seconds:g}초가 {DEADLINE_WARN_SECONDS:g}초보다 큼. "
+            "백엔드는 30초까지만 기다리므로 사진 다운로드·축소 시간을 더하면 판정 결과를 받기 전에 끊길 수 있음"
+        )
+    return None
 
 
 def backend_summary(s: Settings) -> str:
@@ -138,9 +151,12 @@ def _bad_gateway() -> HTTPException:
 
 
 def _retry_after(response: httpx.Response) -> str:
-    # 상대 서버가 숫자(초)로 준 경우만 그대로 넘긴다. 날짜 형식 등은 기본값을 쓴다
+    # 상대 서버가 숫자(초)로 준 경우만 넘긴다(상한 MAX_RETRY_AFTER). 날짜 형식 등은 기본값을 쓴다
     value = response.headers.get("Retry-After", "").strip()
-    return value if value.isdigit() else DEFAULT_RETRY_AFTER
+    # isdigit만 보면 '٣' 같은 비ASCII 숫자도 통과해 응답 헤더 인코딩에서 500이 된다
+    if not (value.isascii() and value.isdigit()):
+        return DEFAULT_RETRY_AFTER
+    return str(min(int(value), MAX_RETRY_AFTER))
 
 
 def _parse(response: httpx.Response) -> VlmResult:
@@ -196,7 +212,9 @@ def _raise_transport_error(e: httpx.HTTPError) -> NoReturn:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="사진 판정 요청이 몰림",
         ) from e
-    if isinstance(e, httpx.ConnectTimeout):  # 연결도 못 함 → 상대 서버가 아직 안 떴을 수 있어 재시도
+    # 연결도 못 함 → 일시적인 네트워크 실패일 수 있어 재시도.
+    # 서버리스 콜드스타트는 게이트웨이가 연결을 먼저 받고 답이 늦는 것이라 읽기 시간 초과(504)로 나타날 것으로 본다 (추정, 32번에서 확인)
+    if isinstance(e, httpx.ConnectTimeout):
         raise _Retryable(_bad_gateway()) from e
     if isinstance(e, (httpx.ReadTimeout, httpx.WriteTimeout)):  # 답을 기다리다 남은 시간을 다 씀
         raise HTTPException(

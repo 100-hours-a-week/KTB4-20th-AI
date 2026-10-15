@@ -1,6 +1,7 @@
 import inspect
 import io
 import json
+import logging
 import time
 
 import anyio
@@ -10,6 +11,7 @@ import sentry_sdk
 from fastapi import HTTPException
 from PIL import Image
 from sentry_sdk.integrations.httpx import HttpxIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 from app.core import sentry
 from app.core.config import Settings, settings
@@ -241,6 +243,9 @@ async def test_non_retryable_failure_is_not_retried(fake_vlm, failure, expected)
         pytest.param({"Retry-After": "12"}, "12", id="seconds"),
         pytest.param({}, "30", id="missing"),
         pytest.param({"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, "30", id="date"),
+        # 그대로 넘기면 응답 헤더 인코딩에서 500. 실제 서버처럼 바이트로 보낸다
+        pytest.param([(b"Retry-After", "٣".encode())], "30", id="non-ascii-digit"),
+        pytest.param({"Retry-After": "9" * 400}, "3600", id="too-large"),
     ],
 )
 async def test_rate_limit_maps_to_429_without_retry(fake_vlm, headers, expected):
@@ -330,6 +335,22 @@ async def test_close_clears_client_even_if_closing_fails(monkeypatch):
         vlm_client.get_client()
 
 
+def test_deadline_warning_only_when_close_to_backend_timeout():
+    assert vlm_client.deadline_warning(_settings(vlm_deadline_seconds=20)) is None
+    assert "30초" in vlm_client.deadline_warning(_settings(vlm_deadline_seconds=25))
+    assert vlm_client.deadline_warning(_settings(verify_backend="gemini", vlm_deadline_seconds=60)) is None
+
+
+async def test_lifespan_logs_deadline_warning(monkeypatch, caplog):
+    for key, value in {**SELF_OK, "vlm_deadline_seconds": 25}.items():
+        monkeypatch.setattr(settings, key, value)
+    monkeypatch.setattr(vlm_client, "start", lambda s: None)
+    with caplog.at_level("WARNING", logger="uvicorn.error"):
+        async with lifespan(app):
+            pass
+    assert "VLM_DEADLINE_SECONDS=25초" in caplog.text
+
+
 async def test_score_without_start_raises():
     # 시작 단계를 거치지 않았으면 몰래 클라이언트를 만들지 않는다
     with pytest.raises(RuntimeError):
@@ -399,9 +420,11 @@ async def test_sentry_context_describes_last_attempt_without_secrets(fake_vlm, m
     assert "test-key" not in str(context) and "vlm.example.com" not in str(context)
 
 
-async def test_real_sentry_breadcrumb_hides_vlm_address(fake_vlm, monkeypatch):
+async def test_real_sentry_breadcrumb_hides_vlm_address(fake_vlm, monkeypatch, caplog):
     # Sentry가 httpx 호출을 자동으로 기록하는 기능을 실제로 켜고, 서비스와 같은 정리 함수를 거친 결과를 본다
+    # httpx 로거를 INFO로 올려 요청 문장이 message로 들어오는 경우까지 본다 (PR #68 리뷰)
     monkeypatch.setattr(settings, "vlm_base_url", SELF_OK["vlm_base_url"])
+    caplog.set_level("INFO", logger="httpx")
     kept = []
 
     def keep(crumb, hint):
@@ -410,7 +433,7 @@ async def test_real_sentry_breadcrumb_hides_vlm_address(fake_vlm, monkeypatch):
 
     # 가짜 DSN이라 밖으로 보내지 않는다. 이 테스트 안에서만 켜고 끈다
     sentry_sdk.init(dsn="https://public@example.invalid/1", before_breadcrumb=keep,
-                    default_integrations=False, integrations=[HttpxIntegration()])
+                    default_integrations=False, integrations=[HttpxIntegration(), LoggingIntegration(level=logging.INFO, event_level=None)])
     try:
         fake_vlm(ok)
         await _score()
@@ -419,6 +442,8 @@ async def test_real_sentry_breadcrumb_hides_vlm_address(fake_vlm, monkeypatch):
         sentry_sdk.get_global_scope().set_client(None)
 
     http_crumbs = [c for c in kept if c.get("category") == "httplib"]
-    assert http_crumbs, "httpx 호출 기록이 남아야 이 테스트가 의미 있음"
+    log_crumbs = [c for c in kept if c.get("category") == "httpx"]
+    assert http_crumbs and log_crumbs, "호출 기록과 로그 기록이 둘 다 남아야 이 테스트가 의미 있음"
     assert all(c["data"]["url"] == "[Filtered]" for c in http_crumbs)
+    assert all("[Filtered]" in c["message"] for c in log_crumbs)
     assert "vlm.example.com" not in str(kept)
