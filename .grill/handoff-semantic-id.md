@@ -23,7 +23,7 @@ gh pr list --state open                           # 열린 PR
 ## 2. 읽는 순서와 문서 우선순위
 
 1. 이 문서
-2. `docs/adr/adr-0003.md`(모델 방식), `adr-0004.md`(서빙), `adr-0005.md`(학습 데이터와 평가). 모두 Proposed다. ADR-0000은 Accepted로 유지된다
+2. `docs/adr/adr-0003.md`(모델 방식), `adr-0004.md`(서빙), `adr-0005.md`(학습 데이터와 평가). 모두 Proposed다. ADR-0000은 Accepted로 유지된다. 전환 조건: ADR-0005는 M1과 개발용 평가 구현 PR이 머지되고 분할·누수 방지 테스트가 통과할 때, ADR-0003은 최종용 평가를 통과할 때(통과 시 ADR-0000을 Superseded로), ADR-0004는 벤치마크로 기본 경로를 정할 때. 상태 변경은 PR로 하고 리뷰어 머지가 승인 시점이다
 3. `.grill/attention-based-place-recommendation-tasks.md`의 해당 마일스톤
 4. `.grill/attention-based-place-recommendation.md`(결정, 가정, 열린 질문)
 
@@ -80,7 +80,7 @@ $AIHUB_ROOT/277.국내_여행로그_데이터(수도권)_Validation/01-1.정식�
 
 1. 승인 없이 M1 착수·푸시·머지 → 위 규칙 확인
 2. 낡은 메모리 신뢰 → 문서 우선순위를 따른다
-3. ADR 불변성 위반(ADR-0000 수정, Proposed를 임의로 Accepted로 전환) → 전환 조건은 ADR-0005의 최종 평가 통과다
+3. ADR 불변성 위반(ADR-0000 수정, Proposed를 임의로 Accepted로 전환) → 전환 조건은 2절을 따르고, 상태 변경은 PR로 한다
 4. 데이터 누수: 방문 행동으로 취향 벡터 계산, AI-Hub Validation을 별도 평가셋으로 사용, 최종용을 여러 번 열람 → 모두 금지
 5. 범위 이탈: 서비스 지역 밖 데이터 포함, 미매핑 미션 코드(4, 22, 24, 25, 26)나 FOOD 차원을 입력에 사용 → 제외 결정
 6. 숫자 정의 혼동(위 7절)
