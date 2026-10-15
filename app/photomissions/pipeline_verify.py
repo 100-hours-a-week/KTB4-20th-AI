@@ -118,7 +118,6 @@ async def score_photo(
 ) -> VlmResult:
     # 5. 사진 판정 - 이미지+장소명+미션 내용을 VLM한테 주고 관찰→인식→판단→조언을 한 번에 받음
     # VERIFY_BACKEND가 판정 모델을 정한다. 자체 모델의 시간 제한·에러 처리는 vlm_client가 맡는다
-    sentry_sdk.set_tag("verify_backend", settings.verify_backend)
     if settings.verify_backend == "self":
         return await vlm_client.score(image_bytes, place_name, mission_description)
 
@@ -192,6 +191,8 @@ def build_response(
 
 async def verify_photo(request: VerifyRequest) -> VerifyResponse:
     # 오케스트레이터 - 판단하지 않고 1~7단계를 순서대로 호출만 한다
+    # 모델을 부르기 전에 끝나는 요청(위치 반려·사진 다운로드 실패)도 Sentry에서 백엔드별로 볼 수 있게 맨 앞에서 붙인다
+    sentry_sdk.set_tag("verify_backend", settings.verify_backend)
     assert_allowed_source(request.image_url)  # 1
     # 좌표가 없으면 위치로는 판정할 수 없으므로 사진 판정(VLM)으로 넘긴다
     if request.photo_coordinates is not None and is_clear_mismatch(  # 2

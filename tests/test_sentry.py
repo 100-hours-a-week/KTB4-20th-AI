@@ -1,3 +1,4 @@
+import pytest
 import sentry_sdk
 
 from app.core import sentry
@@ -34,6 +35,36 @@ def test_breadcrumb_url_query_is_removed():
     data = sentry.scrub_breadcrumb(crumb)["data"]
     assert "secret" not in data["url"]
     assert "http.query" not in data
+
+
+# 자체 모델 서버 주소에는 Pod·엔드포인트 ID가 들어 있어 통째로 가린다
+
+VLM_URL = "https://abc123pod-8000.proxy.runpod.net/v1/chat/completions"
+
+
+@pytest.fixture
+def vlm_base_url(monkeypatch):
+    monkeypatch.setattr(settings, "vlm_base_url", "https://ABC123pod-8000.proxy.runpod.net/v1")  # 대소문자 무관
+
+
+def test_breadcrumb_vlm_url_is_filtered(vlm_base_url):
+    crumb = {"category": "httplib", "data": {"url": VLM_URL}}
+    assert sentry.scrub_breadcrumb(crumb)["data"]["url"] == "[Filtered]"
+
+
+def test_span_vlm_url_and_name_are_filtered(vlm_base_url):
+    event = {"spans": [{"description": f"POST {VLM_URL}", "data": {"url": VLM_URL}}]}
+    span = sentry.scrub_event(event)["spans"][0]
+    assert span["data"]["url"] == "[Filtered]"
+    assert span["description"] == "POST [Filtered]"
+
+
+def test_other_hosts_are_not_filtered(vlm_base_url):
+    # 자체 모델 서버가 아닌 호출(S3 등)은 지금처럼 쿼리만 뗀다
+    event = {"spans": [{"description": f"GET {SIGNED_URL}", "data": {"url": SIGNED_URL}}]}
+    span = sentry.scrub_event(event)["spans"][0]
+    assert span["data"]["url"] == SIGNED_URL.split("?")[0]
+    assert span["description"] == f"GET {SIGNED_URL}"  # span 이름의 쿼리는 Sentry SDK가 이미 뗀다
 
 
 def test_sentry_not_initialized_without_dsn(monkeypatch):

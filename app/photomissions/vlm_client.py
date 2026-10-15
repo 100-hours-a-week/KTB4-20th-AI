@@ -2,13 +2,13 @@
 
 import asyncio
 import base64
-import json
+import math
+from typing import NoReturn
 from urllib.parse import urlparse
 
 import httpx
 import sentry_sdk
 from fastapi import HTTPException, status
-from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
@@ -23,6 +23,9 @@ POOL_TIMEOUT = 2.0
 # TODO: 동시 연결 수는 32번(서버리스 동시성·콜드스타트 측정) 후 확정
 MAX_CONNECTIONS = 20
 DEFAULT_RETRY_AFTER = "30"  # 상대 서버가 Retry-After를 안 주면 Gemini 429와 같은 값을 쓴다
+# 바깥 안전망은 마감보다 조금 늦게 둔다. 마감 경계에서는 httpx 시간 초과가 먼저 나서 원인별 코드(503·502·504)가 남는다
+# 이벤트 루프가 오래 멈추면 안전망이 먼저 날 수 있고, 그때는 504다
+DEADLINE_GUARD = 0.1
 
 _client: httpx.AsyncClient | None = None
 _settings: Settings | None = None
@@ -37,8 +40,9 @@ def settings_errors(s: Settings) -> list[str]:
         errors.append("VLM_BASE_URL은 http(s)://로 시작하는 서버 주소여야 함")
     if not s.vlm_model.strip():
         errors.append("VLM_MODEL이 비어 있음")
-    if s.vlm_deadline_seconds is None or s.vlm_deadline_seconds <= 0:
-        errors.append("VLM_DEADLINE_SECONDS는 0보다 커야 함")
+    deadline = s.vlm_deadline_seconds
+    if deadline is None or not math.isfinite(deadline) or deadline <= 0:  # inf면 마감이 사라지고 nan은 비교가 안 된다
+        errors.append("VLM_DEADLINE_SECONDS는 0보다 큰 유한한 수여야 함")
 
     success, retry, landmark = s.self_success_threshold, s.self_retry_threshold, s.self_landmark_threshold
     if success is None or retry is None or landmark is None:
@@ -86,9 +90,11 @@ def start(s: Settings, transport: httpx.AsyncBaseTransport | None = None) -> Non
 
 async def close() -> None:
     global _client, _settings
-    if _client is not None:
-        await _client.aclose()
-    _client, _settings = None, None
+    try:
+        if _client is not None:
+            await _client.aclose()
+    finally:  # 닫다가 실패하거나 취소돼도 닫힌 클라이언트를 다시 쓰지 않게 비운다
+        _client, _settings = None, None
 
 
 def get_client() -> tuple[httpx.AsyncClient, Settings]:
@@ -144,7 +150,8 @@ def _parse(response: httpx.Response) -> VlmResult:
         if not isinstance(content, str):
             raise TypeError("content가 문자열이 아님")
         return VlmResult.model_validate_json(content)
-    except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValidationError) as e:
+    # ValueError: JSON 깨짐과 UTF-8이 아닌 응답(UnicodeDecodeError)을 함께 잡는다. ValidationError도 여기 속한다
+    except (ValueError, KeyError, IndexError, TypeError) as e:
         raise _Retryable(_bad_gateway()) from e
 
 
@@ -158,20 +165,12 @@ async def _attempt(
         write=min(WRITE_TIMEOUT, remaining),
         pool=min(POOL_TIMEOUT, remaining),
     )
+    trace["upstream_status"], trace["last_error"] = None, None  # 마지막 시도 결과만 남긴다
     try:
         response = await client.post("chat/completions", json=payload, timeout=timeout)
-    except httpx.PoolTimeout as e:  # 우리 쪽 동시 연결이 꽉 참
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="사진 판정 요청이 몰림",
-        ) from e
-    except httpx.ConnectTimeout as e:  # 연결도 못 함 → 상대 서버가 아직 안 떴을 수 있어 재시도
-        raise _Retryable(_bad_gateway()) from e
-    except (httpx.ReadTimeout, httpx.WriteTimeout) as e:  # 남은 시간을 다 써서 재시도할 시간이 없음
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과",
-        ) from e
-    except httpx.TransportError as e:  # 연결 실패·끊김
-        raise _Retryable(_bad_gateway()) from e
+    except httpx.HTTPError as e:
+        trace["last_error"] = type(e).__name__  # 예외 문자열에는 서버 주소가 들어 있을 수 있어 종류만 남긴다
+        _raise_transport_error(e)
 
     trace["upstream_status"] = response.status_code
     if response.status_code == status.HTTP_429_TOO_MANY_REQUESTS:  # 바로 다시 불러도 또 막히므로 재시도 안 함
@@ -184,7 +183,31 @@ async def _attempt(
         raise _Retryable(_bad_gateway())
     if response.status_code >= 400:  # 401·403·404 등은 설정 문제라 다시 불러도 같다
         raise _bad_gateway()
-    return _parse(response)
+    try:
+        return _parse(response)
+    except _Retryable as e:
+        trace["last_error"] = type(e.__cause__).__name__  # 예: JSONDecodeError, ValidationError
+        raise
+
+
+def _raise_transport_error(e: httpx.HTTPError) -> NoReturn:
+    # 응답을 못 받은 경우. httpx 시간 초과는 상속 관계가 있어 구체적인 것부터 본다
+    if isinstance(e, httpx.PoolTimeout):  # 우리 쪽 동시 연결이 꽉 참
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="사진 판정 요청이 몰림",
+        ) from e
+    if isinstance(e, httpx.ConnectTimeout):  # 연결도 못 함 → 상대 서버가 아직 안 떴을 수 있어 재시도
+        raise _Retryable(_bad_gateway()) from e
+    if isinstance(e, (httpx.ReadTimeout, httpx.WriteTimeout)):  # 답을 기다리다 남은 시간을 다 씀
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과",
+        ) from e
+    raise _Retryable(_bad_gateway()) from e  # 연결 실패·끊김
+
+
+def _can_retry(remaining: float) -> bool:
+    # 남은 시간이 없으면 새 요청을 시작하지 않는다. 연결 시간 초과값보다 짧으면 연결만 하다 끝날 수 있어 하지 않는다
+    return remaining > 0 and remaining > CONNECT_TIMEOUT
 
 
 async def score(image_bytes: bytes, place_name: str, mission_description: str) -> VlmResult:
@@ -194,18 +217,18 @@ async def score(image_bytes: bytes, place_name: str, mission_description: str) -
     loop = asyncio.get_running_loop()
     started = loop.time()  # 시스템 시계가 바뀌어도 흔들리지 않는 시계
     deadline = started + float(s.vlm_deadline_seconds or 0)
-    trace: dict = {"attempts": 0, "upstream_status": None}
+    trace: dict = {"attempts": 0, "upstream_status": None, "last_error": None}
     try:
-        async with asyncio.timeout_at(deadline):
+        # 마감(deadline)은 한 번만 정하고 재시도 때 다시 계산하지 않는다. 바깥 안전망만 DEADLINE_GUARD만큼 늦다
+        async with asyncio.timeout_at(deadline + DEADLINE_GUARD):
             while True:
                 trace["attempts"] += 1
                 try:
                     return await _attempt(client, payload, deadline - loop.time(), trace)
                 except _Retryable as e:
-                    # 재시도는 남은 시간이 연결 시간 초과값보다 길 때만. 못 하면 원래 원인(502) 그대로
-                    if trace["attempts"] >= MAX_ATTEMPTS or deadline - loop.time() <= CONNECT_TIMEOUT:
-                        raise e.error from e.__cause__
-    except TimeoutError as e:  # 전체 마감이 지나 요청이 끊김
+                    if trace["attempts"] >= MAX_ATTEMPTS or not _can_retry(deadline - loop.time()):
+                        raise e.error from e.__cause__  # 재시도를 못 하면 원래 원인(502) 그대로
+    except TimeoutError as e:  # 바깥 안전망이 요청을 끊음
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과",
         ) from e

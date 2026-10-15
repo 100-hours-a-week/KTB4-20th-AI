@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import sentry_sdk
 from fastapi import HTTPException
 from google.genai import errors
 from PIL import Image
@@ -347,6 +348,15 @@ async def test_far_photo_rejected_before_download_and_vlm(fake_verify_steps):
     assert res.result == "fail"
     assert res.reason == "location_mismatch"
     assert fake_verify_steps == {"fetch_image": 0, "score_photo": 0}
+
+
+async def test_backend_tag_is_set_even_when_rejected_before_vlm(fake_verify_steps, monkeypatch):
+    # 위치로 반려돼 모델을 부르지 않은 요청도 Sentry에서 백엔드별로 볼 수 있어야 한다
+    tags = {}
+    monkeypatch.setattr(sentry_sdk, "set_tag", lambda key, value: tags.update({key: value}))
+    seoul = Coordinates(latitude=37.5665, longitude=126.9780)
+    await pipeline_verify.verify_photo(_verify_request(seoul))
+    assert tags == {"verify_backend": "gemini"}
 
 
 async def test_nearby_photo_goes_to_vlm(fake_verify_steps):

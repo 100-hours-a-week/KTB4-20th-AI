@@ -9,7 +9,9 @@ import pytest
 import sentry_sdk
 from fastapi import HTTPException
 from PIL import Image
+from sentry_sdk.integrations.httpx import HttpxIntegration
 
+from app.core import sentry
 from app.core.config import Settings, settings
 from app.main import app, lifespan
 from app.photomissions import vlm_client
@@ -51,6 +53,8 @@ def test_complete_self_settings_pass():
         {"vlm_model": " "},
         {"vlm_deadline_seconds": None},
         {"vlm_deadline_seconds": 0},
+        {"vlm_deadline_seconds": float("inf")},  # 마감이 사라짐
+        {"vlm_deadline_seconds": float("nan")},  # 어떤 비교도 거짓이라 검사를 빠져나감
         {"self_success_threshold": None},
         {"self_retry_threshold": None},
         {"self_landmark_threshold": None},
@@ -188,6 +192,7 @@ RETRYABLE = [
     pytest.param(raise_(httpx.ConnectTimeout), id="connect-timeout"),
     pytest.param(raise_(httpx.RemoteProtocolError), id="connection-dropped"),
     pytest.param(lambda r: httpx.Response(200, content=b"not json"), id="broken-json"),
+    pytest.param(lambda r: httpx.Response(200, content=b"\xff"), id="not-utf8"),
     pytest.param(lambda r: httpx.Response(200, json={"choices": []}), id="empty-choices"),
     pytest.param(lambda r: _chat(None), id="content-missing"),
     pytest.param(lambda r: _chat(123), id="content-not-string"),
@@ -270,6 +275,61 @@ async def test_deadline_during_second_attempt_maps_to_504(fake_vlm, monkeypatch)
     assert time.monotonic() - started < 1  # 두 번째 답(5초)을 기다리지 않고 마감에 끊긴다
 
 
+async def test_one_deadline_for_all_attempts(fake_vlm):
+    # 마감은 한 번만 정한다. 재시도의 시간 초과 값은 남은 시간이라 첫 시도보다 작아야 한다
+    server = fake_vlm(status_(500), ok)
+    await _score()
+    first, second = (r.extensions["timeout"] for r in server.requests)
+    assert first == {"connect": 5.0, "write": 10.0, "pool": 2.0, "read": pytest.approx(60, abs=0.5)}
+    assert second["read"] < first["read"]
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        pytest.param(httpx.PoolTimeout, 503, id="pool-full"),
+        pytest.param(httpx.ConnectTimeout, 502, id="connect-timeout"),
+    ],
+)
+async def test_inner_timeout_at_deadline_keeps_its_cause(fake_vlm, monkeypatch, failure, expected):
+    # 마감 경계에서 httpx 시간 초과가 나면 바깥 안전망(504)보다 먼저라 원인별 코드가 남는다
+    # 시간 흔들림에 테스트가 흔들리지 않게 안전망 여유만 넓힌다
+    monkeypatch.setattr(vlm_client, "DEADLINE_GUARD", 0.3)
+    server = fake_vlm(slow(0.25, raise_(failure)), ok, vlm_deadline_seconds=0.2)
+    with pytest.raises(HTTPException) as exc:
+        await _score()
+    assert exc.value.status_code == expected
+    assert len(server.requests) == 1  # 남은 시간이 없어 새 요청을 시작하지 않음
+
+
+@pytest.mark.parametrize(
+    ("remaining", "connect_timeout", "expected"),
+    [
+        (10, 5, True),
+        (5, 5, False),  # 연결 시간 초과값과 같으면 하지 않음
+        (0, 0, False),  # 남은 시간이 없으면 연결 시간 초과값과 상관없이 하지 않음
+        (-1, 0, False),
+    ],
+)
+def test_can_retry(monkeypatch, remaining, connect_timeout, expected):
+    monkeypatch.setattr(vlm_client, "CONNECT_TIMEOUT", connect_timeout)
+    assert vlm_client._can_retry(remaining) is expected
+
+
+async def test_close_clears_client_even_if_closing_fails(monkeypatch):
+    vlm_client.start(_settings())
+    client, _ = vlm_client.get_client()
+
+    async def broken_close():
+        raise RuntimeError("닫기 실패")
+
+    monkeypatch.setattr(client, "aclose", broken_close)
+    with pytest.raises(RuntimeError, match="닫기 실패"):
+        await vlm_client.close()
+    with pytest.raises(RuntimeError, match="시작되지 않음"):
+        vlm_client.get_client()
+
+
 async def test_score_without_start_raises():
     # 시작 단계를 거치지 않았으면 몰래 클라이언트를 만들지 않는다
     with pytest.raises(RuntimeError):
@@ -312,14 +372,53 @@ async def test_request_matches_measurement_script(fake_vlm, monkeypatch):
 
 # 7. 관측 — Sentry에 시도 횟수·걸린 시간·상대 서버 상태를 남기고 키·주소는 남기지 않는다
 
-async def test_sentry_context_records_attempts_without_secrets(fake_vlm, monkeypatch):
+@pytest.mark.parametrize(
+    ("outcomes", "expected"),
+    [
+        pytest.param((status_(500), ok), {"upstream_status": 200, "last_error": None}, id="retry-then-ok"),
+        # 두 번째가 연결 실패면 첫 시도의 500이 남지 않아야 한다
+        pytest.param((status_(500), raise_(httpx.ConnectError)),
+                     {"upstream_status": None, "last_error": "ConnectError"}, id="500-then-connect-error"),
+        pytest.param((status_(500), lambda r: httpx.Response(200, content=b"not json")),
+                     {"upstream_status": 200, "last_error": "JSONDecodeError"}, id="500-then-broken-json"),
+    ],
+)
+async def test_sentry_context_describes_last_attempt_without_secrets(fake_vlm, monkeypatch, outcomes, expected):
     recorded = {}
     monkeypatch.setattr(sentry_sdk, "set_context", lambda name, value: recorded.update({name: value}))
-    fake_vlm(status_(500), ok)
-    await _score()
+    fake_vlm(*outcomes)
+    try:
+        await _score()
+    except HTTPException:
+        pass
 
     context = recorded["vlm"]
     assert context["attempts"] == 2
-    assert context["upstream_status"] == 200
+    assert {k: context[k] for k in expected} == expected
     assert context["elapsed_sec"] >= 0
     assert "test-key" not in str(context) and "vlm.example.com" not in str(context)
+
+
+async def test_real_sentry_breadcrumb_hides_vlm_address(fake_vlm, monkeypatch):
+    # Sentry가 httpx 호출을 자동으로 기록하는 기능을 실제로 켜고, 서비스와 같은 정리 함수를 거친 결과를 본다
+    monkeypatch.setattr(settings, "vlm_base_url", SELF_OK["vlm_base_url"])
+    kept = []
+
+    def keep(crumb, hint):
+        kept.append(sentry.scrub_breadcrumb(crumb, hint))
+        return kept[-1]
+
+    # 가짜 DSN이라 밖으로 보내지 않는다. 이 테스트 안에서만 켜고 끈다
+    sentry_sdk.init(dsn="https://public@example.invalid/1", before_breadcrumb=keep,
+                    default_integrations=False, integrations=[HttpxIntegration()])
+    try:
+        fake_vlm(ok)
+        await _score()
+    finally:
+        sentry_sdk.get_client().close()
+        sentry_sdk.get_global_scope().set_client(None)
+
+    http_crumbs = [c for c in kept if c.get("category") == "httplib"]
+    assert http_crumbs, "httpx 호출 기록이 남아야 이 테스트가 의미 있음"
+    assert all(c["data"]["url"] == "[Filtered]" for c in http_crumbs)
+    assert "vlm.example.com" not in str(kept)

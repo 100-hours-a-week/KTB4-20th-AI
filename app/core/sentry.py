@@ -3,6 +3,7 @@
 import tomllib
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import sentry_sdk
 
@@ -35,6 +36,23 @@ def _strip_query(url: str) -> str:
     return url.split("?", 1)[0]
 
 
+def _is_vlm_url(url: str) -> bool:
+    # 자체 모델 서버 주소에는 Pod·엔드포인트 ID가 호스트나 경로에 들어 있다. 호스트 이름으로 비교한다
+    vlm_host = urlparse(settings.vlm_base_url.strip()).hostname
+    return vlm_host is not None and urlparse(url).hostname == vlm_host
+
+
+def _clean_url(url: str) -> str:
+    return _FILTERED if _is_vlm_url(url) else _strip_query(url)
+
+
+def _clean_http_data(data: dict[str, Any]) -> None:
+    # httpx 호출 기록(breadcrumb·span)의 URL을 정리한다
+    data.pop("http.query", None)
+    if isinstance(data.get("url"), str):
+        data["url"] = _clean_url(data["url"])
+
+
 def scrub_event(event: dict[str, Any], hint: dict[str, Any] | None = None) -> dict[str, Any]:
     # 에러·트랜잭션 이벤트를 보내기 직전에 민감한 값을 지운다
     request = event.get("request") or {}
@@ -47,19 +65,17 @@ def scrub_event(event: dict[str, Any], hint: dict[str, Any] | None = None) -> di
     request.pop("query_string", None)
 
     for span in event.get("spans") or []:
-        data = span.get("data") or {}
-        data.pop("http.query", None)
-        if isinstance(data.get("url"), str):
-            data["url"] = _strip_query(data["url"])
+        _clean_http_data(span.get("data") or {})
+        # span 이름도 "POST https://..." 형태라 주소가 들어 있다
+        method, _, url = (span.get("description") or "").partition(" ")
+        if url and _is_vlm_url(url):
+            span["description"] = f"{method} {_FILTERED}"
     return event
 
 
 def scrub_breadcrumb(crumb: dict[str, Any], hint: dict[str, Any] | None = None) -> dict[str, Any]:
-    # 외부 호출(S3 사진 다운로드 등) 기록에서 URL 쿼리를 지운다
-    data = crumb.get("data") or {}
-    data.pop("http.query", None)
-    if isinstance(data.get("url"), str):
-        data["url"] = _strip_query(data["url"])
+    # 외부 호출 기록에서 URL 쿼리를 지우고(S3 사진 다운로드 등), 자체 모델 서버 주소는 통째로 가린다
+    _clean_http_data(crumb.get("data") or {})
     return crumb
 
 
