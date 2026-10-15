@@ -70,7 +70,10 @@ def test_normalize_refuses_missing_answers_instead_of_passing_as_success():
 
 def test_v2_prompt_changes_only_the_place_question():
     # 한 번에 하나만 바꿔 재야 효과를 알 수 있다. 장소 질문 앞뒤는 v1과 같아야 한다
-    from scripts.question_format import QUESTION_SYSTEM_PROMPT, QUESTION_SYSTEM_PROMPT_V2
+    from scripts.question_format import (
+        QUESTION_SYSTEM_PROMPT,
+        QUESTION_SYSTEM_PROMPT_V2,
+    )
 
     head, tail = QUESTION_SYSTEM_PROMPT.split("[place]")
     head_v2, tail_v2 = QUESTION_SYSTEM_PROMPT_V2.split("[place]")
