@@ -3,12 +3,18 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import sentry_sdk
 from fastapi import HTTPException
 from google.genai import errors
 from PIL import Image
 
 from app.core.config import settings
-from app.photomissions import gemini_client, pipeline_generate, pipeline_verify
+from app.photomissions import (
+    gemini_client,
+    pipeline_generate,
+    pipeline_verify,
+    vlm_client,
+)
 from app.photomissions.schemas import (
     Coordinates,
     DisplayName,
@@ -31,12 +37,18 @@ PLACE = MissionPlace(
 )
 
 
+@pytest.fixture(autouse=True)
+def _gemini_backend(monkeypatch):
+    # 이 파일은 Gemini 호출을 확인한다. 로컬 .env가 self여도 결과가 같도록 Gemini로 고정한다
+    monkeypatch.setattr(settings, "verify_backend", "gemini")
+
+
 def _api_error(code: int) -> errors.APIError:
     return errors.APIError(code, {"error": {"code": code, "message": "fake"}})
 
 
 def _raising(exc: Exception):
-    async def fake(**kwargs):
+    async def fake(*args, **kwargs):
         raise exc
     return fake
 
@@ -100,6 +112,36 @@ async def test_score_photo_schema_mismatch_after_retry_maps_to_502(monkeypatch):
 async def test_score_photo_returns_vlm_result(monkeypatch):
     monkeypatch.setattr(pipeline_verify, "generate_structured", _returning(VLM_RESULT))
     assert await _score() == VLM_RESULT
+
+
+# VERIFY_BACKEND 분기 — 설정이 정한 모델만 불리고, 미션 생성은 항상 Gemini다
+
+async def test_gemini_backend_does_not_call_self_model(monkeypatch):
+    monkeypatch.setattr(pipeline_verify, "generate_structured", _returning(VLM_RESULT))
+    monkeypatch.setattr(vlm_client, "score", _raising(AssertionError("자체 모델을 부르면 안 됨")))
+    assert await _score() == VLM_RESULT
+
+
+async def test_self_backend_does_not_call_gemini(monkeypatch):
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(pipeline_verify, "generate_structured", _raising(AssertionError("Gemini를 부르면 안 됨")))
+
+    async def fake_score(image_bytes, place_name, mission_description):
+        assert (image_bytes, place_name, mission_description) == (b"jpeg", "첨성대", "첨성대 정면이 보이게 찍기")
+        return VLM_RESULT
+
+    monkeypatch.setattr(vlm_client, "score", fake_score)
+    assert await _score() == VLM_RESULT
+
+
+async def test_generate_uses_gemini_even_when_verify_backend_is_self(monkeypatch):
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    result = MissionBatch(missions=[
+        MissionDescription(number=1, description="첨성대 정면이 보이게 찍기", scope="GROUP"),
+    ])
+    monkeypatch.setattr(pipeline_generate, "generate_structured", _returning(result))
+    monkeypatch.setattr(vlm_client, "score", _raising(AssertionError("자체 모델을 부르면 안 됨")))
+    assert await _describe() == result
 
 
 async def test_write_descriptions_returns_result(monkeypatch):
@@ -306,6 +348,15 @@ async def test_far_photo_rejected_before_download_and_vlm(fake_verify_steps):
     assert res.result == "fail"
     assert res.reason == "location_mismatch"
     assert fake_verify_steps == {"fetch_image": 0, "score_photo": 0}
+
+
+async def test_backend_tag_is_set_even_when_rejected_before_vlm(fake_verify_steps, monkeypatch):
+    # 위치로 반려돼 모델을 부르지 않은 요청도 Sentry에서 백엔드별로 볼 수 있어야 한다
+    tags = {}
+    monkeypatch.setattr(sentry_sdk, "set_tag", lambda key, value: tags.update({key: value}))
+    seoul = Coordinates(latitude=37.5665, longitude=126.9780)
+    await pipeline_verify.verify_photo(_verify_request(seoul))
+    assert tags == {"verify_backend": "gemini"}
 
 
 async def test_nearby_photo_goes_to_vlm(fake_verify_steps):
