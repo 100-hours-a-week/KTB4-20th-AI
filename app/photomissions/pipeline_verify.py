@@ -4,11 +4,13 @@ from typing import Literal, NamedTuple, cast
 from urllib.parse import urlparse
 
 import httpx
+import sentry_sdk
 from fastapi import HTTPException, status
 from google.genai import errors, types
 from PIL import Image, ImageOps
 
 from app.core.config import settings
+from app.photomissions import vlm_client
 from app.photomissions.gemini_client import generate_structured
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
 from app.photomissions.schemas import (
@@ -115,6 +117,11 @@ async def score_photo(
     image_bytes: bytes, place_name: str, mission_description: str
 ) -> VlmResult:
     # 5. 사진 판정 - 이미지+장소명+미션 내용을 VLM한테 주고 관찰→인식→판단→조언을 한 번에 받음
+    # VERIFY_BACKEND가 판정 모델을 정한다. 자체 모델의 시간 제한·에러 처리는 vlm_client가 맡는다
+    sentry_sdk.set_tag("verify_backend", settings.verify_backend)
+    if settings.verify_backend == "self":
+        return await vlm_client.score(image_bytes, place_name, mission_description)
+
     # TODO: Retry-After 값(30초)은 baseline 측정 후 확정
     user_prompt = f"목표 장소: {place_name}\n미션 내용: {mission_description}"
     image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")

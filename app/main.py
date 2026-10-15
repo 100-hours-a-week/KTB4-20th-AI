@@ -18,9 +18,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # 자체 모델로 판정할 때만 설정을 확인한다. 틀리면 요청을 받기 전에 시작이 멈춘다
     if settings.verify_backend == "self":
         vlm_client.check_settings(settings)
+        vlm_client.start(settings)  # 검사를 통과한 뒤에만 클라이언트를 만든다
     # uvicorn 로그에 같이 찍혀서 켜자마자 지금 어느 모델로 판정하는지 보인다
     logging.getLogger("uvicorn.error").info(vlm_client.backend_summary(settings))
-    yield
+    try:
+        yield
+    finally:
+        await vlm_client.close()  # 시작하지 않았으면 아무것도 하지 않는다
 
 
 app = FastAPI(title="KTB4-20th-AI", lifespan=lifespan)
