@@ -1,6 +1,6 @@
 import io
 import math
-from typing import Literal
+from typing import Literal, NamedTuple, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -27,10 +27,30 @@ _MAX_DIMENSION = 1024  # TODO: baseline 측정(2단계) 후 토큰·정확도 �
 _JPEG_QUALITY = 85
 
 # 2단계 평가셋(경주 4곳 400건, 사람이 매긴 정답 200장)으로 gemini-3.1-pro-preview 기준 확정.
-# 점수 분포는 모델마다 달라서 모델을 바꾸면 다시 측정해야 한다
+# 점수 분포는 모델마다 달라서 모델을 바꾸면 다시 측정해야 한다. 자체 모델은 SELF_* 설정값을 쓴다
 SUCCESS_THRESHOLD = 90.0  # 정답 성공 사진은 66장 중 65장이 90점 이상, 70~89점은 정답 재시도·실패뿐이었다
 RETRY_THRESHOLD = 40.0
 LANDMARK_THRESHOLD = 60.0  # 정답 성공 사진의 인식 신뢰도는 전부 95 이상, 정답 실패 사진은 중앙값 10
+
+
+class Thresholds(NamedTuple):
+    success: float
+    retry: float
+    landmark: float
+
+
+GEMINI_THRESHOLDS = Thresholds(SUCCESS_THRESHOLD, RETRY_THRESHOLD, LANDMARK_THRESHOLD)
+
+
+def current_thresholds() -> Thresholds:
+    # 판정 백엔드에 맞는 기준. self 값이 있고 범위가 맞는지는 앱 시작 때 vlm_client.check_settings가 확인한다
+    if settings.verify_backend == "self":
+        return Thresholds(
+            cast(float, settings.self_success_threshold),
+            cast(float, settings.self_retry_threshold),
+            cast(float, settings.self_landmark_threshold),
+        )
+    return GEMINI_THRESHOLDS
 
 
 def assert_allowed_source(image_url: str) -> None:
@@ -129,9 +149,10 @@ async def score_photo(
 
 def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:
     # 6. 등급 변환 - match_score 구간으로 success/retry/fail 판정
-    if match_score >= SUCCESS_THRESHOLD:
+    thresholds = current_thresholds()
+    if match_score >= thresholds.success:
         return "success"
-    if match_score >= RETRY_THRESHOLD:
+    if match_score >= thresholds.retry:
         return "retry"
     return "fail"
 
@@ -148,7 +169,7 @@ def build_response(
     result = to_grade(match_score)
     landmark_confidence = (
         raw_landmark_confidence
-        if raw_landmark_confidence is not None and raw_landmark_confidence >= LANDMARK_THRESHOLD
+        if raw_landmark_confidence is not None and raw_landmark_confidence >= current_thresholds().landmark
         else None
     )
     retry_hint = raw_retry_hint if result == "retry" else None

@@ -23,6 +23,12 @@ ALLOWED_HOST = "my-bucket.s3.ap-northeast-2.amazonaws.com"
 CHEOMSEONGDAE = Coordinates(latitude=35.8347, longitude=129.2190)
 
 
+@pytest.fixture(autouse=True)
+def _gemini_backend(monkeypatch):
+    # 이 파일의 모든 테스트를 Gemini 기준(90/40/60)으로 고정한다. 로컬 .env가 self여도 결과가 같다
+    monkeypatch.setattr(settings, "verify_backend", "gemini")
+
+
 def _jpeg_bytes(size=(10, 10), exif=None) -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", size).save(buf, format="JPEG", **({"exif": exif} if exif else {}))
@@ -163,6 +169,18 @@ def test_retry_hint_only_on_retry():
     assert build_response(RETRY_THRESHOLD, raw_retry_hint=hint).retry_hint == hint
     assert build_response(SUCCESS_THRESHOLD, raw_retry_hint=hint).retry_hint is None
     assert build_response(RETRY_THRESHOLD - 0.1, raw_retry_hint=hint).retry_hint is None
+
+
+def test_self_backend_uses_its_own_thresholds(monkeypatch):
+    # 자체 모델은 Gemini 기준(90/40/60)이 아니라 SELF_* 설정값으로 판정한다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "self_success_threshold", 70.0)
+    monkeypatch.setattr(settings, "self_retry_threshold", 30.0)
+    monkeypatch.setattr(settings, "self_landmark_threshold", 50.0)
+    assert to_grade(70) == "success"  # Gemini 기준이면 재시도
+    assert to_grade(35) == "retry"  # Gemini 기준이면 실패
+    assert to_grade(29.9) == "fail"
+    assert build_response(80, raw_landmark_confidence=50).landmark_confidence == 50  # Gemini 기준이면 숨김
 
 
 def test_location_mismatch_response():
