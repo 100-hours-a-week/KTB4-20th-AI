@@ -42,7 +42,23 @@ from app.photomissions import gemini_client
 from app.photomissions.pipeline_verify import _haversine_km, normalize_image
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
 from app.photomissions.schemas import Coordinates, VlmResult
-from scripts.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer, rule_grade
+from scripts.place_probe import (
+    IDENTIFY_SYSTEM_PROMPT,
+    IDENTIFY_USER_TEXT,
+    QUESTION_OBS_SYSTEM_PROMPT,
+    IdentifyAnswer,
+    QuestionAnswerObs,
+    identify_fields,
+    option_probs,
+    prob_field,
+    question_obs_fields,
+)
+from scripts.question_format import (
+    QUESTION_SYSTEM_PROMPT,
+    QUESTION_SYSTEM_PROMPT_V2,
+    QuestionAnswer,
+    rule_grade,
+)
 from scripts.split_eval import load_split, split_error
 
 LANDMARKS = {
@@ -153,8 +169,16 @@ def is_lookalike(case: dict) -> bool:
     return case["kind"] == "negative" and {case["place"], case["target"]} == LOOKALIKE
 
 
-def user_text(case: dict) -> str:
+def lookalike_cases(cases: list[dict], with_positives: bool = False) -> list[dict]:
+    # 닮은 장소 오답만. with_positives면 그 사진들에 맞는 장소 미션(positive)도 함께 남긴다
+    photos = {c["photo"] for c in cases if is_lookalike(c)}
+    return [c for c in cases if is_lookalike(c) or (with_positives and c["kind"] == "positive" and c["photo"] in photos)]
+
+
+def user_text(case: dict, fmt: str = "score") -> str:
     # score_photo와 같은 형식. 평가셋 B처럼 사진마다 미션이 다르면 case["mission"]을 쓴다
+    if fmt == "identify":  # 장소 알아보기 실험은 목표 장소를 알려 주지 않는다
+        return IDENTIFY_USER_TEXT
     mission = case.get("mission") or MISSIONS[case["target"]]
     return f"목표 장소: {case['target']}\n미션 내용: {mission}"
 
@@ -174,9 +198,14 @@ def question_fields(answer: QuestionAnswer) -> dict:
 
 
 # 판정 형식별 (지시문, 응답 스키마, 기록할 칸). score = 지금 서비스(점수), question = 개선 ② 객관식(학습 데이터와 같은 지시문)
+# question_v2 = 장소 질문만 바꾼 객관식 실험. 답 형식·등급 규칙은 question과 같다
+# question_obs·identify = 장소 구별 실험 (scripts/place_probe.py)
 FORMATS = {
     "score": (VERIFY_SYSTEM_PROMPT, VlmResult, vlm_fields),
     "question": (QUESTION_SYSTEM_PROMPT, QuestionAnswer, question_fields),
+    "question_v2": (QUESTION_SYSTEM_PROMPT_V2, QuestionAnswer, question_fields),
+    "question_obs": (QUESTION_OBS_SYSTEM_PROMPT, QuestionAnswerObs, question_obs_fields),
+    "identify": (IDENTIFY_SYSTEM_PROMPT, IdentifyAnswer, identify_fields),
 }
 
 
@@ -191,7 +220,8 @@ def out_conflict(records: list[dict], model: str, fmt: str) -> str | None:
 
 def add_format_args(ap: argparse.ArgumentParser) -> None:
     # baseline_verify(평가셋 A)·measure_eval_b(B·B 보강)가 같은 옵션을 쓴다
-    ap.add_argument("--format", choices=tuple(FORMATS), default="score", help="score = 지금 서비스(점수), question = 객관식")
+    ap.add_argument("--format", choices=tuple(FORMATS), default="score", help="score = 지금 서비스(점수), question = 객관식, question_v2 = 장소 질문만 바꾼 객관식, "
+                         "question_obs = 관찰 칸을 먼저 쓰는 객관식, identify = 목표 장소 없이 장소 알아보기")
     ap.add_argument("--split-file", type=pathlib.Path, help="개선용·최종용 나누기 결과 (eval_split.json)")
     ap.add_argument("--split", choices=("dev", "final"), help="이쪽 사진만 모델에 보낸다")
     ap.add_argument("--open-final", action="store_true", help="final 사진도 보낸다 (--split final 또는 나누기 없이). 출시 판단 때만")
@@ -204,7 +234,7 @@ async def judge(case: dict, image_bytes: bytes, fmt: str = "score") -> dict:
     processed = normalize_image(image_bytes)
     t1 = time.perf_counter()
     contents = [
-        user_text(case),
+        user_text(case, fmt),
         types.Part.from_bytes(data=processed, mime_type="image/jpeg"),
     ]
     config = types.GenerateContentConfig(
@@ -237,9 +267,11 @@ async def judge(case: dict, image_bytes: bytes, fmt: str = "score") -> dict:
 
 
 async def judge_local(
-    case: dict, image_bytes: bytes, base_url: str, model: str, api_key: str = "", fmt: str = "score"
+    case: dict, image_bytes: bytes, base_url: str, model: str, api_key: str = "", fmt: str = "score",
+    logprobs: bool = False,
 ) -> dict:
     # judge와 같은 프롬프트·리사이즈·응답 형식으로 OpenAI 호환 서버를 1번 부른다. 비용은 GPU 시간으로 따로 계산하므로 0으로 적는다
+    # logprobs면 장소 답 자리의 선택지별 확률(place_probs)도 남긴다 (장소 구별 실험 E)
     system_prompt, schema, fields = FORMATS[fmt]
     t0 = time.perf_counter()
     processed = normalize_image(image_bytes)
@@ -250,7 +282,7 @@ async def judge_local(
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": [
-                {"type": "text", "text": user_text(case)},
+                {"type": "text", "text": user_text(case, fmt)},
                 {"type": "image_url", "image_url": {"url": image_url}},
             ]},
         ],
@@ -260,6 +292,8 @@ async def judge_local(
             "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema()},
         },
     }
+    if logprobs:
+        payload.update(logprobs=True, top_logprobs=10)
     record = {"normalize_sec": round(t1 - t0, 3), "resized_bytes": len(processed), "original_bytes": len(image_bytes)}
     try:
         # 첫 호출은 모델을 메모리에 올리느라(서버리스는 콜드스타트) 수십 초 걸릴 수 있어 넉넉히 기다린다
@@ -275,11 +309,18 @@ async def judge_local(
 
     body = response.json()
     usage = body.get("usage") or {}
-    content = body["choices"][0]["message"].get("content") or ""
+    message = body["choices"][0]["message"]
+    content = message.get("content") or ""
+    # 추론 모델을 vLLM reasoning parser로 띄우면 생각은 content가 아닌 칸에 따로 온다 (실험 B). 출력 토큰에는 생각도 들어 있다
+    reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
     record.update(
         prompt_tokens=usage.get("prompt_tokens", 0), image_tokens=0,
         output_tokens=usage.get("completion_tokens", 0), thought_tokens=0, cost_usd=0.0,
+        reasoning_chars=len(reasoning),
     )
+    if logprobs:
+        tokens = (body["choices"][0].get("logprobs") or {}).get("content") or []
+        record["place_probs"] = option_probs(tokens, *prob_field(fmt))
     try:
         record.update(parsed=True, **fields(schema.model_validate_json(content)))
     except ValidationError:
@@ -327,6 +368,9 @@ async def main() -> None:
     ap.add_argument("--same-as", type=pathlib.Path, help="이 결과 파일에서 성공한 건과 같은 사진·미션만 호출")
     ap.add_argument("--lookalike-only", action="store_true", help="월정교↔동궁과월지 오답 미션만 호출")
     ap.add_argument("--all-negatives", action="store_true", help="사진마다 나머지 장소 미션을 모두 만든다 (기본은 1개)")
+    ap.add_argument("--with-positives", action="store_true",
+                    help="--lookalike-only와 함께: 같은 사진에 맞는 장소 미션도 넣는다 (오답만 보면 '아니오'만 하는 모델도 좋아 보인다)")
+    ap.add_argument("--logprobs", action="store_true", help="장소 답의 선택지별 확률을 남긴다 (OpenAI 호환 서버만)")
     add_format_args(ap)
     args = ap.parse_args()
     # 평가셋 A도 개선용·최종용으로 나뉘어 있다. 끝의 요약에 final이 섞이지 않게 나누기를 요구한다
@@ -334,7 +378,11 @@ async def main() -> None:
         ap.error(error)
     if args.same_as and args.same_as.resolve() == args.out.resolve():
         ap.error("--same-as와 --out은 다른 파일이어야 함")
+    if args.with_positives and not args.lookalike_only:
+        ap.error("--with-positives는 --lookalike-only와 함께 쓴다")
     local = is_openai_compat(args.model)
+    if args.logprobs and not local:
+        ap.error("--logprobs는 OpenAI 호환 서버(vLLM 등)에서만 쓸 수 있음")
     # judge는 호출할 때마다 gemini_client.MODEL_NAME을 읽으므로 여기서 바꾸면 이 실행 전체가 이 모델로 판정한다
     gemini_client.MODEL_NAME = args.model
 
@@ -342,7 +390,10 @@ async def main() -> None:
     index = index_photos(args.photos)
     cases = build_cases(rows, set(index), args.per_place, args.seed, args.all_negatives)
     if args.lookalike_only:
-        cases = [c for c in cases if is_lookalike(c)]
+        cases = lookalike_cases(cases, args.with_positives)
+    if args.format == "identify":
+        # 목표 장소를 알려 주지 않으므로 사진마다 한 번만 묻는다 (positive 케이스 = 사진 한 장)
+        cases = [c for c in cases if c["kind"] == "positive"]
     if args.same_as:
         base = [json.loads(line) for line in args.same_as.read_text(encoding="utf-8").splitlines() if line.strip()]
         keep = {case_key(r) for r in base if "error" not in r}
@@ -385,7 +436,7 @@ async def main() -> None:
                 image_bytes = read_photo(index[case["photo"]])
                 if local:
                     record = await judge_local(
-                        case, image_bytes, args.base_url, args.model, settings.vlm_api_key, args.format)
+                        case, image_bytes, args.base_url, args.model, settings.vlm_api_key, args.format, args.logprobs)
                 else:
                     record = await judge(case, image_bytes, args.format)
             except Exception as e:  # noqa: BLE001 — 사진 하나가 깨져도 전체 실행을 멈추지 않는다
@@ -398,7 +449,7 @@ async def main() -> None:
             }
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
             f.flush()
-            score = line.get("match_score", line.get("grade", line.get("error", "-")))
+            score = line.get("match_score", line.get("grade", line.get("identify", line.get("error", "-"))))
             print(f"[{i}/{len(todo)}] {case['photo']} → {case['target']} [{case['kind']}]: {score} ({line['model_sec']}초)")
     summarize(args.out)
 

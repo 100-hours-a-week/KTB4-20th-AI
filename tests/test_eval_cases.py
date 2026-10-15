@@ -208,3 +208,16 @@ SPLIT = pathlib.Path("eval_split.json")
 )
 def test_final_is_locked_unless_opened_on_purpose(split, split_file, open_final, needs_split, blocked):
     assert (split_error(split, split_file, open_final, needs_split) is not None) == blocked
+
+
+def test_question_v2_results_are_read_and_kept_apart_from_v1():
+    # 장소 질문만 바꾼 실험 결과도 객관식처럼 다시 등급을 매기고, v1 결과와 섞이지 않게 형식으로 구분한다
+    record = {
+        "eval_set": "B_aug", "photo": "a.jpg", "place": "황리단길", "category": "음식", "truth": "success",
+        "model": "qwen", "format": "question_v2", "parsed": True, "grade": "fail",
+        "answer": {"judgeable": "yes", "target": "enough", "condition": "yes", "place": "yes"},
+    }
+    [case] = from_b([record])
+    assert case.format == "question_v2"
+    assert classify(case) == "TP"
+    assert mixed_runs([case, _case(model="qwen", format="question")]) is not None

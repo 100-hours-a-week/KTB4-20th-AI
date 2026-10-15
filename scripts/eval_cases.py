@@ -51,7 +51,7 @@ class EvalCase(BaseModel):
     truth: Grade  # 사람 정답
     model: str
     match_score: float | None  # 모델이 답하지 못했으면(에러·형식 불일치) None
-    format: Literal["score", "question"] = "score"  # 측정 형식. 예전 기록에는 칸이 없어 점수 형식이다
+    format: Literal["score", "question", "question_v2"] = "score"  # 측정 형식. 예전 기록에는 칸이 없어 점수 형식이다
     answer: QuestionAnswer | None = None  # 객관식 형식으로 잰 결과. 있으면 점수 대신 이걸로 등급을 정한다
 
     @property
