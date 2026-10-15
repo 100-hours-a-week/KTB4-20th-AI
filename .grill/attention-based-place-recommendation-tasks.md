@@ -10,8 +10,8 @@ Date: 2026-10-14
 - [x] T0-2 품질 필터(영업 중, 평점 3.0 초과, 평가 수 10 이상)를 `place_selection.py`에 적용하고 7,680건 조합 테스트 통과 확인
 - [x] T0-3 중복 장소 방지 수정(부산 32건 실패 해소) 후 7,680건 모두 통과
 - [x] T0-4 하루 단위 시퀀스 측정 스크립트(`scripts/measure_travel_sequences.py`)와 테스트
-- [ ] T0-5 `exp/place-quality-filter`의 변경을 커밋·PR로 정리(품질 필터와 중복 방지는 같은 브랜치). 완료 조건: 7,680건 통과 로그를 PR에 첨부, README 검증 결과 표(커밋·날짜·DB 건수) 갱신
-- [ ] T0-6 CI용 `tests/fixtures/dump.sql`에 `business_status` 컬럼 반영(품질 필터 머지의 선행). 사용자가 CI는 우선순위를 두지 않기로 했으므로 머지 시점에 처리
+- [x] T0-5 `exp/place-quality-filter`의 변경을 커밋·PR로 정리(품질 필터와 중복 방지는 같은 브랜치). 완료 조건: 7,680건 통과 로그를 PR에 첨부, README 검증 결과 표(커밋·날짜·DB 건수) 갱신 (PR #70, 2026-10-15 머지)
+- [x] T0-6 CI용 `tests/fixtures/dump.sql`에 `business_status` 컬럼 반영(품질 필터 머지의 선행). 서버와 같은 10,165건 기준으로 갱신하고 CI 통과 확인 (PR #70에 포함, 2026-10-15 머지)
 
 ## 1. 데이터 파이프라인 (AI-Hub 여행로그 → 학습 예제)
 
