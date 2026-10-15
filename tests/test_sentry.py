@@ -1,3 +1,4 @@
+import pytest
 import sentry_sdk
 
 from app.core import sentry
@@ -34,6 +35,57 @@ def test_breadcrumb_url_query_is_removed():
     data = sentry.scrub_breadcrumb(crumb)["data"]
     assert "secret" not in data["url"]
     assert "http.query" not in data
+
+
+# 자체 모델 서버 주소에는 Pod·엔드포인트 ID가 들어 있어 통째로 가린다
+
+VLM_URL = "https://abc123pod-8000.proxy.runpod.net/v1/chat/completions"
+
+
+@pytest.fixture
+def vlm_base_url(monkeypatch):
+    monkeypatch.setattr(settings, "vlm_base_url", "https://ABC123pod-8000.proxy.runpod.net/v1")  # 대소문자 무관
+
+
+def test_breadcrumb_vlm_url_is_filtered(vlm_base_url):
+    crumb = {"category": "httplib", "data": {"url": VLM_URL}}
+    assert sentry.scrub_breadcrumb(crumb)["data"]["url"] == "[Filtered]"
+
+
+def test_span_vlm_url_and_name_are_filtered(vlm_base_url):
+    event = {"spans": [{"description": f"POST {VLM_URL}", "data": {"url": VLM_URL}}]}
+    span = sentry.scrub_event(event)["spans"][0]
+    assert span["data"]["url"] == "[Filtered]"
+    assert span["description"] == "POST [Filtered]"
+
+
+def test_other_hosts_are_not_filtered(vlm_base_url):
+    # 자체 모델 서버가 아닌 호출(S3 등)은 지금처럼 쿼리만 뗀다
+    event = {"spans": [{"description": f"GET {SIGNED_URL}", "data": {"url": SIGNED_URL}}]}
+    span = sentry.scrub_event(event)["spans"][0]
+    assert span["data"]["url"] == SIGNED_URL.split("?")[0]
+    assert span["description"] == f"GET {SIGNED_URL}"  # span 이름의 쿼리는 Sentry SDK가 이미 뗀다
+
+
+def test_breadcrumb_message_hides_vlm_url_and_s3_signature(vlm_base_url):
+    # 로그가 INFO로 켜지면 httpx 요청 문장이 message로 들어온다 (PR #68 리뷰)
+    vlm = sentry.scrub_breadcrumb({"category": "httpx", "message": f'HTTP Request: POST {VLM_URL} "HTTP/1.1 200 OK"'})
+    assert vlm["message"] == 'HTTP Request: POST [Filtered] "HTTP/1.1 200 OK"'
+    s3 = sentry.scrub_breadcrumb({"category": "httpx", "message": f'HTTP Request: GET {SIGNED_URL} "HTTP/1.1 200 OK"'})
+    assert "secret" not in s3["message"] and SIGNED_URL.split("?")[0] in s3["message"]
+
+
+def test_exception_and_log_messages_are_cleaned(vlm_base_url):
+    # httpx 상태 오류 메시지는 요청 URL(사진 서명 포함)을 담는다
+    event = {
+        "exception": {"values": [{"type": "HTTPStatusError", "value": f"Client error '403 Forbidden' for url '{SIGNED_URL}'"}]},
+        "logentry": {"message": "호출 %s", "formatted": f"호출 {VLM_URL}"},
+        "message": f"실패 {VLM_URL}",
+    }
+    out = sentry.scrub_event(event)
+    assert "secret" not in out["exception"]["values"][0]["value"]
+    assert out["logentry"]["formatted"] == "호출 [Filtered]" and out["message"] == "실패 [Filtered]"
+    assert "abc123pod" not in str(out)
 
 
 def test_sentry_not_initialized_without_dsn(monkeypatch):

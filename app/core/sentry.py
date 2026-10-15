@@ -1,8 +1,10 @@
 # Sentry 에러 모니터링 초기화. SENTRY_DSN이 비어 있으면 켜지 않는다 (로컬·테스트)
 
+import re
 import tomllib
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlparse
 
 import sentry_sdk
 
@@ -35,6 +37,32 @@ def _strip_query(url: str) -> str:
     return url.split("?", 1)[0]
 
 
+def _is_vlm_url(url: str) -> bool:
+    # 자체 모델 서버 주소에는 Pod·엔드포인트 ID가 호스트나 경로에 들어 있다. 호스트 이름으로 비교한다
+    vlm_host = urlparse(settings.vlm_base_url.strip()).hostname
+    return vlm_host is not None and urlparse(url).hostname == vlm_host
+
+
+def _clean_url(url: str) -> str:
+    return _FILTERED if _is_vlm_url(url) else _strip_query(url)
+
+
+# 글(로그 문장, 예외 메시지) 속 URL. 따옴표·괄호 앞에서 끊는다
+_URL_IN_TEXT = re.compile(r"""https?://[^\s"'<>()]+""")
+
+
+def _clean_text(text: str) -> str:
+    # 로그 문장(예: httpx의 'HTTP Request: POST https://...')과 예외 메시지에 든 URL도 같은 기준으로 정리한다
+    return _URL_IN_TEXT.sub(lambda m: _clean_url(m.group(0)), text)
+
+
+def _clean_http_data(data: dict[str, Any]) -> None:
+    # httpx 호출 기록(breadcrumb·span)의 URL을 정리한다
+    data.pop("http.query", None)
+    if isinstance(data.get("url"), str):
+        data["url"] = _clean_url(data["url"])
+
+
 def scrub_event(event: dict[str, Any], hint: dict[str, Any] | None = None) -> dict[str, Any]:
     # 에러·트랜잭션 이벤트를 보내기 직전에 민감한 값을 지운다
     request = event.get("request") or {}
@@ -47,19 +75,31 @@ def scrub_event(event: dict[str, Any], hint: dict[str, Any] | None = None) -> di
     request.pop("query_string", None)
 
     for span in event.get("spans") or []:
-        data = span.get("data") or {}
-        data.pop("http.query", None)
-        if isinstance(data.get("url"), str):
-            data["url"] = _strip_query(data["url"])
+        _clean_http_data(span.get("data") or {})
+        # span 이름도 "POST https://..." 형태라 주소가 들어 있다
+        method, _, url = (span.get("description") or "").partition(" ")
+        if url and _is_vlm_url(url):
+            span["description"] = f"{method} {_FILTERED}"
+
+    # 예외 메시지(예: httpx 상태 오류는 요청 URL을 담는다)와 로그 이벤트 문장
+    for exc in (event.get("exception") or {}).get("values") or []:
+        if isinstance(exc.get("value"), str):
+            exc["value"] = _clean_text(exc["value"])
+    logentry = event.get("logentry") or {}
+    for key in ("message", "formatted"):
+        if isinstance(logentry.get(key), str):
+            logentry[key] = _clean_text(logentry[key])
+    if isinstance(event.get("message"), str):
+        event["message"] = _clean_text(event["message"])
     return event
 
 
 def scrub_breadcrumb(crumb: dict[str, Any], hint: dict[str, Any] | None = None) -> dict[str, Any]:
-    # 외부 호출(S3 사진 다운로드 등) 기록에서 URL 쿼리를 지운다
-    data = crumb.get("data") or {}
-    data.pop("http.query", None)
-    if isinstance(data.get("url"), str):
-        data["url"] = _strip_query(data["url"])
+    # 외부 호출 기록에서 URL 쿼리를 지우고(S3 사진 다운로드 등), 자체 모델 서버 주소는 통째로 가린다
+    _clean_http_data(crumb.get("data") or {})
+    # 로그가 INFO 이상으로 켜지면 httpx 요청 문장이 message로 들어온다
+    if isinstance(crumb.get("message"), str):
+        crumb["message"] = _clean_text(crumb["message"])
     return crumb
 
 

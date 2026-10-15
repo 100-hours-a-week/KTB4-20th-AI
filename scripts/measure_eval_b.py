@@ -27,7 +27,6 @@ import zipfile
 
 from app.core.config import settings
 from app.photomissions import gemini_client
-from app.photomissions.pipeline_verify import to_grade
 from scripts.baseline_verify import (
     DEFAULT_LOCAL_URL,
     PRICES,
@@ -37,6 +36,7 @@ from scripts.baseline_verify import (
     judge_local,
     out_conflict,
 )
+from scripts.eval_cases import grade
 from scripts.question_format import QuestionAnswer, rule_grade
 from scripts.split_eval import load_split, split_error
 
@@ -77,7 +77,8 @@ def record_grade(record: dict) -> str:
     # 객관식 기록은 답 원본에서 지금 규칙으로 다시 정한다 (eval_cases와 같은 방식)
     if record.get("answer"):
         return rule_grade(QuestionAnswer.model_validate(record["answer"]))
-    return to_grade(record["match_score"])
+    # 점수 기록은 eval_cases와 같은 고정 기준(Gemini 90/40)으로 센다. 서버의 VERIFY_BACKEND 설정과 무관하다
+    return grade(record["match_score"])
 
 
 def summarize(out: pathlib.Path) -> None:
