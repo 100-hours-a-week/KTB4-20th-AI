@@ -100,3 +100,43 @@ def test_local_engine_rejects_when_concurrency_is_exhausted():
     engine._slots.acquire()
     with pytest.raises(InferenceUnavailable):
         engine.generate([1], [["A"]])
+
+
+def test_selection_lets_the_model_choose_the_category_for_non_food_slots(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.trips.schemas.schemas import (
+        E_Preference,
+        E_Region,
+        Member_Survey,
+        User,
+    )
+    from app.trips.services.model import selection
+    from app.trips.services.slot_plan import build_slot_plan
+
+    def place(gid):
+        return SimpleNamespace(id=gid, matched_preferences=[], selected_for=[])
+
+    pools = {
+        "HISTORY_CULTURE": [place("h1"), place("both")],
+        "NATURE_HEALING": [place("n1"), place("both")],
+        "ACTIVITY": [place("a1")],
+        "CONVENIENCE_SHOPPING": [place("c1")],
+        "FOOD": [place("f1"), place("f2")],
+    }
+    monkeypatch.setattr(selection, "get_DB_places_by_category", lambda category, limit, region, **kw: list(pools[category.value]))
+    seen = {}
+
+    class FakeRouter:
+        def generate(self, header, slots, width=10):
+            seen["slots"] = slots
+            return [s[0] if s else None for s in slots], "cpu"
+
+    members = [Member_Survey(user=User(user_id="u"), survey_result=[5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1])]
+    plan = build_slot_plan(members, selection.model_slot_plan_seed())
+    places, route = selection.select_places_by_model(plan, [], E_Region.SEOUL, members, FakeRouter())
+    non_food = [s for i, s in enumerate(seen["slots"]) if i not in (1, 4)]
+    assert all(set(s) == {"h1", "both", "n1", "a1", "c1"} for s in non_food)  # 네 카테고리의 합집합, 중복 없이
+    assert seen["slots"][1] == seen["slots"][4] == ["f1", "f2"]
+    assert route == "cpu" and len(places) == len(plan.items)
+    assert all(E_Preference.FOOD in p.matched_preferences for i, p in enumerate(places) if i in (1, 4))

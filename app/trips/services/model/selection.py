@@ -1,7 +1,9 @@
 """학습한 모델로 장소를 고른다 (ADR-0003). 규칙 경로(place_selection.py)와 같은 입력·출력 모양이다.
 
-슬롯 구조(점심·저녁 FOOD, 저녁 이후 ACTIVITY)와 회피조건, 품질 필터는 규칙 경로와 같은 DB 조회를 그대로 쓴다.
-모델은 슬롯마다 후보 중 무엇을 고를지만 정한다. 후보 밖 장소는 낼 수 없다.
+후보 제한은 ADR-0003이 정한 대로다: 점심·저녁(2·5번째)은 FOOD, 저녁 이후(6번째)는 야간형 ACTIVITY이고,
+나머지 슬롯은 FOOD가 아닌 카테고리 전체(역사·문화, 자연·힐링, 액티비티, 편의·쇼핑)에서 모델이 고른다.
+규칙 경로처럼 슬롯마다 카테고리를 정하지 않는다. 회피조건과 품질 필터는 규칙 경로와 같은 DB 조회를 그대로 쓴다.
+모델은 후보 중 무엇을 고를지만 정한다. 후보 밖 장소는 낼 수 없다.
 """
 
 import random
@@ -53,10 +55,22 @@ def select_places_by_model(
                 pools[key] = get_DB_places_by_category(category, POOL_LIMIT, region, excluded_types=excluded)
         return pools[key]
 
+    # FOOD가 아닌 슬롯의 후보: 주간 카테고리 4개의 합집합. 장소마다 취향 순위가 가장 높은 소속 카테고리로 표시한다
+    daytime_pool: list[Place] = []
+    daytime_category: dict[str, E_Preference] = {}
+    for category in slot_plan.daytime_category_ranking:
+        for place in pool_for(category, False):
+            if place.id not in daytime_category:
+                daytime_category[place.id] = category
+                daytime_pool.append(place)
+
     slot_categories: list[tuple[E_Preference, bool]] = [
         (item.category, item.time_slot == E_Time_Slot.EVENING) for item in slot_plan.items
     ]
-    slot_pools = [pool_for(category, evening) for category, evening in slot_categories]
+    slot_pools = [
+        daytime_pool if category != E_Preference.FOOD and not evening else pool_for(category, evening)
+        for category, evening in slot_categories
+    ]
     top_two = [c.value for c in slot_plan.daytime_category_ranking[:2]]
     header = preference_header(top_two, region.value)
 
@@ -64,10 +78,11 @@ def select_places_by_model(
 
     places: list[Place] = []
     matched: dict[E_Preference, list[str]] = {}
-    for gid, (category, _), pool in zip(chosen, slot_categories, slot_pools, strict=True):
+    for gid, (slot_category, evening), pool in zip(chosen, slot_categories, slot_pools, strict=True):
         if gid is None:
             continue
         place = next(p for p in pool if p.id == gid)
+        category = slot_category if evening or slot_category == E_Preference.FOOD else daytime_category[gid]
         if category not in matched:
             matched[category] = find_matched_members(members, category)
         place.matched_preferences = [category]

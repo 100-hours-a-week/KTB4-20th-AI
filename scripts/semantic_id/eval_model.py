@@ -1,7 +1,15 @@
 """생성 모델과 기준선의 장소 단위 Recall@k를 잰다 (M4 T4-1~T4-3, ADR-0005).
 
 각 정답 방문(DB 범위 안으로 판정된 방문)에 대해, 그 앞 방문까지를 정답으로 준 채(teacher forcing) 다음 장소 순위를 만든다.
-후보는 같은 지역의 품질 필터 통과 장소 중 오늘 이미 방문한 장소를 뺀 것이다. 분모는 필터 통과 여부와 무관한 모든 정답 방문이다
+후보는 같은 지역의 품질 필터 통과 장소 중 오늘 이미 방문한 장소를 뺀 것이다.
+
+세 가지 조건으로 모델을 잰다(--mode). 취향 입력만 다르고 문맥은 모두 앞 방문의 정답이다.
+  free        지역 전체 후보에서 순위를 매긴다(슬롯 제약 없음). 취향은 로그의 0/1 그대로(학습과 같은 입력). 모델 자체의 예측력을 본다.
+  food-slots  ADR-0003이 정한 후보 제한이다. 2·5번째는 FOOD, 6번째는 ACTIVITY, 나머지는 FOOD가 아닌 카테고리 전체에서 모델이 고른다.
+              취향 입력은 상위 둘만 1이다. 서비스가 ADR대로 동작할 때의 조건이다.
+  top2-slots  food-slots에 더해 FOOD가 아닌 슬롯은 취향 상위 둘 카테고리의 후보 안에서만 모델이 고른다(어느 쪽 카테고리, 어느 장소인지는 모델이 정함).
+  rule-slots  규칙이 슬롯마다 카테고리까지 정하고(점심·저녁 FOOD, 나머지는 취향 상위 둘, 동점은 고정 순서) 모델은 그 안에서만 고른다.
+              selection.py가 PR #78 시점에 구현한 조건이다. 분모는 필터 통과 여부와 무관한 모든 정답 방문이다
 (필터에 막힌 정답은 어떤 방법도 맞힐 수 없다).
 
   모델     후보 제한 빔 서치(폭 1, 5, 10). Recall@k는 폭 안에서 k위 안에 정답이 있는 비율
@@ -24,7 +32,7 @@ import sys
 
 from scripts.semantic_id.decode import rank_candidates, torch_next_logprobs
 from scripts.semantic_id.split import iter_days
-from scripts.semantic_id.tokens import CATEGORIES
+from scripts.semantic_id.tokens import CATEGORIES, header_tokens
 from scripts.semantic_id.train_data import build_examples
 
 KS = (1, 5, 10)
@@ -58,7 +66,18 @@ def load_inputs(v1: pathlib.Path):
     return places, by_region
 
 
-def evaluate(examples: list[dict], by_region: dict[str, list[dict]], next_logprobs, widths=WIDTHS, seeds: int = RULE_SEEDS) -> list[dict]:
+FIXED_SLOTS = (1, 4, 5)  # 점심, 저녁, 저녁 이후(ACTIVITY)는 카테고리가 고정이다
+SERVICE_TIE_SEED = 0  # app/trips/services/model/selection.py의 TIE_SEED와 같은 값
+
+
+def service_header_and_plan(preference: dict[str, int], region: str) -> tuple[list[int], list[str]]:
+    plan = rule_slot_categories(preference, random.Random(SERVICE_TIE_SEED))
+    top_two = {plan[0], plan[3]}
+    return header_tokens({c: int(c in top_two) for c in CATEGORIES}, region), plan
+
+
+def evaluate(examples: list[dict], by_region: dict[str, list[dict]], next_logprobs, widths=WIDTHS, seeds: int = RULE_SEEDS,
+             mode: str = "free") -> list[dict]:
     """정답 방문마다 기록을 만든다: 여행자, 지역, 필터 통과 여부, 모델 순위(폭별), 인기순 순위, 규칙 순위(시드별)."""
     records = []
     for ex in examples:
@@ -70,8 +89,22 @@ def evaluate(examples: list[dict], by_region: dict[str, list[dict]], next_logpro
                 continue
             target = ex["gids"][j]
             used = set(ex["gids"][:j])
-            candidates = {p["google_place_id"]: p["code"] for p in pool if p["google_place_id"] not in used}
-            context = ex["tokens"][:6 + 4 * j]
+            if mode in ("rule-slots", "food-slots", "top2-slots"):
+                header, plan = service_header_and_plan(ex["preference"], region)
+                category = plan[j] if j < len(plan) else None
+
+                def allowed(p, category=category, j=j):
+                    if mode == "rule-slots" or category in ("FOOD", "ACTIVITY") and j in FIXED_SLOTS:
+                        return category in p["categories"]
+                    if mode == "top2-slots":
+                        return bool(set(p["categories"]) & {plan[0], plan[3]})  # 취향 상위 둘 카테고리 안에서 모델이 고른다
+                    return any(c != "FOOD" for c in p["categories"])  # 모델이 FOOD 아닌 카테고리 전체에서 고른다
+
+                candidates = {p["google_place_id"]: p["code"] for p in pool if allowed(p) and p["google_place_id"] not in used}
+                context = header + ex["tokens"][6:6 + 4 * j]
+            else:
+                candidates = {p["google_place_id"]: p["code"] for p in pool if p["google_place_id"] not in used}
+                context = ex["tokens"][:6 + 4 * j]
             rec = {"traveler": ex["traveler_id"], "region": region, "position": j, "in_candidates": target in candidates}
             rec["model"] = {}
             if next_logprobs is not None and candidates:
@@ -174,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model-dir", type=pathlib.Path, help="없으면 기준선만 잰다")
     ap.add_argument("--part", choices=("dev", "final"), default="dev")
     ap.add_argument("--open-final", action="store_true", help="최종용을 연다. 한 번만 쓸 것")
+    ap.add_argument("--mode", choices=("free", "food-slots", "top2-slots", "rule-slots"), default="free", help="모델 후보 조건(위 설명 참고)")
     ap.add_argument("--out", type=pathlib.Path)
     ap.add_argument("--limit", type=int, help="시험용: 하루 수 제한")
     args = ap.parse_args(argv)
@@ -197,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
         model = PlaceLM(**ckpt["config"])
         model.load_state_dict(ckpt["state"])
         next_logprobs, widths = torch_next_logprobs(model, torch.device("cpu")), WIDTHS
-    records = evaluate(examples, by_region, next_logprobs, widths)
+    records = evaluate(examples, by_region, next_logprobs, widths, mode=args.mode)
     result = report(records, widths)
     text = json.dumps(result, ensure_ascii=False, indent=1)
     print(text)
