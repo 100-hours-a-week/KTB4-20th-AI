@@ -19,7 +19,9 @@ import runpod
 from app.trips.services.model.generation import BEAM_WIDTH, generate_itinerary
 
 BUNDLE = Path(os.environ.get("BUNDLE_DIR", "/bundle"))
-SESSION = ort.InferenceSession(str(BUNDLE / "model.onnx"), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+# NVIDIA 장치가 보일 때만 CUDA를 요청한다. 장치 없이 요청하면 폴백하지 않고 프로세스가 죽는 것을 확인했다(GPU 없는 컨테이너에서 종료 코드 139)
+PROVIDERS = (["CUDAExecutionProvider"] if os.path.exists("/dev/nvidiactl") else []) + ["CPUExecutionProvider"]
+SESSION = ort.InferenceSession(str(BUNDLE / "model.onnx"), providers=PROVIDERS)
 BUNDLE_DATA = json.loads((BUNDLE / "codes.json").read_text(encoding="utf-8"))
 CODES = BUNDLE_DATA["codes"]
 

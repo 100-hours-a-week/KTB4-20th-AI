@@ -6,7 +6,7 @@
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip && rm -rf /var/lib/apt/lists/*
-RUN pip3 install --no-cache-dir runpod==1.7.9 onnxruntime-gpu==1.20.1 numpy==2.1.3
+RUN pip3 install --no-cache-dir runpod==1.7.9 onnxruntime-gpu==1.20.2 numpy==2.1.3
 
 WORKDIR /app
 COPY app/trips/services/model/generation.py app/trips/services/model/generation.py

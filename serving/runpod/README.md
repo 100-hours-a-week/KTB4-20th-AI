@@ -44,4 +44,6 @@ curl -s -X POST "$RUNPOD_MODEL_URL/runsync" -H "Authorization: Bearer $RUNPOD_MO
 ```
 
 - 첫 요청(콜드 스타트 포함)과 이후 요청의 지연을 각각 적는다.
-- 이 이미지는 레포에서 빌드·실행까지 확인하지 못했다(RunPod 접근 불가). 첫 배포에서 오류가 나면 로그를 알려 주면 된다.
+- 로컬(Apple Silicon, `--platform linux/amd64` 에뮬레이션)에서 이미지 빌드와 `handler.handler` 호출(CPU provider)까지 확인했다. 이미지 크기는 약 4.45GB(CUDA 베이스 포함)라 콜드 스타트에 이미지 내려받기가 포함될 수 있다.
+- GPU 추론(CUDA provider)은 로컬에서 확인하지 못했다. 핸들러는 `/dev/nvidiactl`이 있을 때만 CUDA를 요청한다(장치 없이 요청하면 폴백하지 않고 프로세스가 죽는 것을 로컬에서 확인). 응답의 `providers` 값으로 실제로 GPU를 썼는지 본다.
+- 첫 배포에서 오류가 나면 로그를 알려 주면 된다(RunPod 접근 불가).
