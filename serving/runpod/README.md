@@ -12,13 +12,18 @@ uv run python -m scripts.semantic_id.package_bundle --model-dir "$V/m3/model_a" 
 
 ## 이미지 빌드와 배포 (사용자가 직접)
 
+이 단계는 사용자의 컴퓨터(또는 CI)에서 한다. RunPod Pod의 터미널에서 실행하는 것이 아니다. 만든 이미지를 레지스트리에 올리고, RunPod 콘솔의 Serverless 엔드포인트가 그 이미지를 받아 GPU 워커를 띄운다.
+
 ```
-docker build -f serving/runpod/Dockerfile --build-arg BUNDLE="$V/m3/bundle_a" -t <레지스트리>/place-model-runpod:v1 .
+docker buildx build --platform linux/amd64 --build-context bundle="$V/m3/bundle_a" \
+    -f serving/runpod/Dockerfile -t <레지스트리>/place-model-runpod:v1 --load .
 docker push <레지스트리>/place-model-runpod:v1
 ```
 
-RunPod 콘솔에서 Serverless 엔드포인트를 만들고 위 이미지를 지정한다(GPU 하나, 최대 워커 1~2, 상시 워커 0으로 시작해 콜드 스타트를 잰다).
-빌드 컨텍스트에 모델 묶음이 들어가므로 `BUNDLE`은 레포 안 경로로 복사해서 쓰거나 `--build-context`를 쓴다.
+- `--build-context`는 BuildKit(Docker 23 이상 기본)이 필요하다. 모델 묶음은 레포 밖에 두고 이 옵션으로만 넘기므로 가중치가 레포에 들어가지 않는다.
+- `--platform linux/amd64`는 RunPod GPU가 x86_64라서 필요하다(Apple Silicon에서 기본 빌드는 arm이라 실행되지 않는다).
+- RunPod 콘솔에서 Serverless 엔드포인트를 만들고 위 이미지를 지정한다(GPU 하나, 최대 워커 1~2, 상시 워커 0으로 시작해 콜드 스타트를 잰다). 메뉴 이름은 콘솔 버전에 따라 다를 수 있다.
+- Docker 없이 GPU 추론만 먼저 확인하려면 Pod를 띄워 터미널에서 `pip install onnxruntime-gpu numpy` 후 `handler`를 직접 실행하면 되지만, Pod는 이미 켜져 있어 콜드 스타트를 잴 수 없다.
 
 ## AI 서버 환경변수
 
