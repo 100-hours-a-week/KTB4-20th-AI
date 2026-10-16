@@ -11,7 +11,6 @@
 """
 
 import argparse
-import collections
 import datetime
 import json
 import pathlib
@@ -35,15 +34,10 @@ def load_db_places() -> list[dict]:
         cur = conn.cursor()
         cur.execute("SELECT id, google_place_id, name, formatted_address, latitude, longitude FROM ai_places ORDER BY id")
         rows = cur.fetchall()
-        cur.execute("SELECT place_id, category FROM ai_place_categories")
-        cats: dict[int, list[str]] = collections.defaultdict(list)
-        for pid, cat in cur.fetchall():
-            cats[pid].append(cat)
     finally:
         conn.close()
     return [
-        {"id": i, "google_place_id": g, "name": n, "address": a or "", "lat": float(la), "lng": float(lo),
-         "categories": cats.get(i, [])}
+        {"id": i, "google_place_id": g, "name": n, "address": a or "", "lat": float(la), "lng": float(lo)}
         for i, g, n, a, la, lo in rows
     ]
 
@@ -52,17 +46,16 @@ def load_days(path: pathlib.Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def build_texts(places: list[dict], days: list[dict], with_category: bool = True) -> list[dict]:
+def build_texts(places: list[dict], days: list[dict]) -> list[dict]:
     # DB 장소는 google_place_id, 로그 방문지는 텍스트가 키다. 같은 텍스트의 로그 방문은 한 번만 임베딩한다
     items = [
-        {"source": "db", "key": p["google_place_id"],
-         "text": db_place_text(p["name"], p["address"], p["categories"] if with_category else [])}
+        {"source": "db", "key": p["google_place_id"], "text": db_place_text(p["name"], p["address"])}
         for p in places
     ]
     seen: set[str] = set()
     for d in days:
         for v in d["visits"]:
-            text = log_visit_text(v if with_category else {**v, "type_cd": ""})
+            text = log_visit_text(v)
             if text and text not in seen:
                 seen.add(text)
                 items.append({"source": "log", "key": text, "text": text})
@@ -88,7 +81,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out-dir", type=pathlib.Path, required=True)
     ap.add_argument("--device", help="cuda, mps, cpu (없으면 자동)")
     ap.add_argument("--batch-size", type=int, default=32)
-    ap.add_argument("--no-category", action="store_true", help="카테고리 라벨을 뺀 텍스트(안 가)로 계산한다")
     args = ap.parse_args(argv)
 
     if (args.out_dir / "embeddings.npy").exists():
@@ -98,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     import sentence_transformers
     import torch
 
-    items = build_texts(load_db_places(), load_days(args.days), with_category=not args.no_category)
+    items = build_texts(load_db_places(), load_days(args.days))
     texts = [i["text"] for i in items]
     device = pick_device(args.device)
     print(f"텍스트 {len(texts)}개 (DB {sum(i['source'] == 'db' for i in items)}, 로그 {sum(i['source'] == 'log' for i in items)}), 장치 {device}")
@@ -117,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             f.write(json.dumps(i, ensure_ascii=False) + "\n")
     meta = {
         "model": args.model, "dim": int(vectors.shape[1]), "count": len(texts), "device": device,
-        "with_category": not args.no_category, "seconds": round(elapsed, 1), "batch_size": args.batch_size,
+        "text_format": "이름 | 시도 시군구", "seconds": round(elapsed, 1), "batch_size": args.batch_size,
         "created": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         "versions": {"sentence_transformers": sentence_transformers.__version__, "torch": torch.__version__,
                      "numpy": np.__version__},

@@ -1,28 +1,22 @@
 """임베딩에 넣을 장소 텍스트를 만든다 (M2 T2-1, ADR-0003).
 
 DB 장소와 로그 방문지가 같은 장소일 때 같은 코드를 받으려면 양쪽에서 같은 규칙으로 같은 칸만 써야 한다.
-쓰는 칸: 정규화한 이름, 시도·시군구, 서비스 카테고리 라벨. 좌표와 평점 같은 값은 넣지 않는다.
+쓰는 칸: 정규화한 이름, 시도·시군구. 좌표, 평점, 카테고리 라벨은 넣지 않는다.
 
-  이름 | 시도 시군구 | 카테고리     예: "경복궁 | 서울 종로구 | 역사·문화"
+  이름 | 시도 시군구     예: "경복궁 | 서울 종로구"
 
-값이 없으면 그 칸을 뺀다. 로그 방문의 약 17.5%는 주소가 없고, 유형 코드 6개는 카테고리 라벨이 없다.
+값이 없으면 그 칸을 뺀다. 로그 방문의 약 3.5%는 주소가 없다.
+
+카테고리 라벨은 넣지 않기로 했다(2026-10-16 실험). 로그 방문의 31%는 유형 코드에 라벨이 없고 DB 장소는 모두 있으며,
+DB는 여러 카테고리를 가질 수 있어, 정답 쌍의 32%에서 한쪽에만 라벨이 있거나 구성이 달랐다. 그 쌍의 코드 일치율은 1~4%였고
+검색 성공률은 라벨이 있어도 달라지지 않았다. 카테고리는 디코딩의 후보 제한(점심·저녁 FOOD)에서 따로 쓴다.
 """
 
 import unicodedata
 
-from scripts.semantic_id.text import category_for_type, normalize_name
+from scripts.semantic_id.text import normalize_name
 
 SEPARATOR = " | "
-
-# 서비스 카테고리 → 텍스트에 쓰는 한글 라벨. 영문 코드보다 한국어 이름과 같은 언어라 임베딩이 가깝게 본다
-CATEGORY_LABELS = {
-    "FOOD": "음식",
-    "NATURE_HEALING": "자연·힐링",
-    "HISTORY_CULTURE": "역사·문화",
-    "ACTIVITY": "액티비티",
-    "CONVENIENCE_SHOPPING": "편의·쇼핑",
-}
-CATEGORY_ORDER = tuple(CATEGORY_LABELS)  # 여러 카테고리일 때 이 순서로 쓴다
 
 # 시도 이름: DB는 "서울특별시"처럼 정식 이름이고 로그는 "서울"처럼 줄인 이름이 섞여 있어 줄인 이름으로 맞춘다
 PROVINCES = {
@@ -98,23 +92,17 @@ def district_of(address: str) -> str:
     return f"{province} {city}" if city else province
 
 
-def category_text(categories: list[str]) -> str:
-    known = [c for c in CATEGORY_ORDER if c in set(categories)]
-    return ", ".join(CATEGORY_LABELS[c] for c in known)
-
-
-def compose(name: str, district: str, categories: list[str]) -> str:
-    parts = [normalize_name(name), district, category_text(categories)]
+def compose(name: str, district: str) -> str:
+    parts = [normalize_name(name), district]
     return SEPARATOR.join(p for p in parts if p)
 
 
-def db_place_text(name: str, formatted_address: str, categories: list[str]) -> str:
-    # DB 장소: ai_places.name, ai_places.formatted_address, ai_place_categories.category(여러 개 가능)
-    return compose(name, district_of(formatted_address), categories)
+def db_place_text(name: str, formatted_address: str) -> str:
+    # DB 장소: ai_places.name, ai_places.formatted_address
+    return compose(name, district_of(formatted_address))
 
 
 def log_visit_text(visit: dict) -> str:
-    # 로그 방문지: days.jsonl의 방문 기록(name, road_addr, lotno_addr, type_cd)
+    # 로그 방문지: days.jsonl의 방문 기록(name, road_addr, lotno_addr). 유형 코드는 쓰지 않는다
     address = visit.get("road_addr") or visit.get("lotno_addr") or ""
-    category = category_for_type(visit.get("type_cd", ""))
-    return compose(visit.get("name", ""), district_of(address), [category] if category else [])
+    return compose(visit.get("name", ""), district_of(address))

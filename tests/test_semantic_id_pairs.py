@@ -31,7 +31,7 @@ def test_pair_requires_close_coordinates_and_similar_name():
 def test_same_text_and_place_are_merged_with_visit_count():
     pairs = build_pairs([PLACE], [_visit(), _visit()])
     assert len(pairs) == 1 and pairs[0]["visits"] == 2
-    assert pairs[0]["log_text"] == "경복궁 | 서울 종로구 | 역사·문화"
+    assert pairs[0]["log_text"] == "경복궁 | 서울 종로구"
 
 
 def test_best_similarity_place_wins_among_neighbours():
@@ -40,14 +40,12 @@ def test_best_similarity_place_wins_among_neighbours():
     assert [p["google_place_id"] for p in pairs] == ["g1"]
 
 
-def test_build_texts_shares_log_texts_and_can_drop_categories():
-    places = [{"google_place_id": "g1", "name": "경복궁", "address": "대한민국 서울특별시 종로구 사직로 161", "categories": ["HISTORY_CULTURE"]}]
-    days = [{"visits": [_visit(), _visit(), _visit(name="북촌", type_cd="9")]}]
+def test_build_texts_shares_log_texts_and_ignores_type_codes():
+    places = [{"google_place_id": "g1", "name": "경복궁", "address": "대한민국 서울특별시 종로구 사직로 161"}]
+    days = [{"visits": [_visit(), _visit(type_cd="9"), _visit(name="북촌")]}]
     items = embed.build_texts(places, days)
-    assert [i["source"] for i in items] == ["db", "log", "log"]  # 같은 로그 텍스트는 한 번만
-    assert items[0]["text"] == items[1]["text"] == "경복궁 | 서울 종로구 | 역사·문화"
-    plain = embed.build_texts(places, days, with_category=False)
-    assert plain[0]["text"] == "경복궁 | 서울 종로구"
+    assert [i["source"] for i in items] == ["db", "log", "log"]  # 유형 코드가 달라도 같은 텍스트는 한 번만
+    assert items[0]["text"] == items[1]["text"] == "경복궁 | 서울 종로구"
 
 
 def test_retrieval_metrics_rank_the_paired_place():

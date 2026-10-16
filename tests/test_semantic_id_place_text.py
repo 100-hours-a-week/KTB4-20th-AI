@@ -1,7 +1,6 @@
 import pytest
 
 from scripts.semantic_id.place_text import (
-    category_text,
     db_place_text,
     district_of,
     log_visit_text,
@@ -31,26 +30,24 @@ def test_district_of(address, expected):
 
 
 def test_db_and_log_give_the_same_text_for_the_same_place():
-    db = db_place_text("경복궁", "대한민국 서울특별시 종로구 사직로 161", ["HISTORY_CULTURE"])
+    db = db_place_text("경복궁", "대한민국 서울특별시 종로구 사직로 161")
     log = log_visit_text({"name": "경복궁", "road_addr": "서울 종로구 사직로 161", "lotno_addr": "", "type_cd": "2"})
-    assert db == log == "경복궁 | 서울 종로구 | 역사·문화"
+    assert db == log == "경복궁 | 서울 종로구"
+
+
+def test_type_code_never_changes_the_text():
+    base = {"name": "온담", "road_addr": "", "lotno_addr": "전북 전주시 완산구 풍남동"}
+    assert log_visit_text({**base, "type_cd": "11"}) == log_visit_text({**base, "type_cd": ""}) == "온담 | 전북 전주시 완산구"
 
 
 def test_missing_parts_are_left_out():
-    assert log_visit_text({"name": "온담", "road_addr": "", "lotno_addr": "", "type_cd": "9"}) == "온담"
-    assert log_visit_text({"name": "온담", "road_addr": "", "lotno_addr": "전북 전주시 완산구 풍남동", "type_cd": "9"}) == "온담 | 전북 전주시 완산구"
+    assert log_visit_text({"name": "온담", "road_addr": "", "lotno_addr": ""}) == "온담"
 
 
 def test_road_address_is_preferred_then_lot_number_address():
-    visit = {"name": "카페", "road_addr": "", "lotno_addr": "부산 해운대구 우동 1", "type_cd": "11"}
-    assert log_visit_text(visit) == "카페 | 부산 해운대구 | 음식"
-
-
-def test_multiple_categories_use_a_fixed_order():
-    assert category_text(["ACTIVITY", "FOOD"]) == "음식, 액티비티"
-    assert category_text(["UNKNOWN"]) == ""
+    visit = {"name": "카페", "road_addr": "", "lotno_addr": "부산 해운대구 우동 1"}
+    assert log_visit_text(visit) == "카페 | 부산 해운대구"
 
 
 def test_name_is_normalized():
-    text = db_place_text("카페 아래헌 / Cafe Arae-Heon", "대한민국 경상북도 경주시 황남동", ["FOOD"])
-    assert text == "카페 아래헌 | 경북 경주시 | 음식"
+    assert db_place_text("카페 아래헌 / Cafe Arae-Heon", "대한민국 경상북도 경주시 황남동") == "카페 아래헌 | 경북 경주시"

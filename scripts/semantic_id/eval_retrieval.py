@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     pairs = [json.loads(line) for line in args.pairs.read_text(encoding="utf-8").splitlines() if line.strip()]
     meta = json.loads((args.embed_dir / "meta.json").read_text(encoding="utf-8"))
     m = retrieval_metrics(vectors, items, pairs)
-    print(f"모델 {meta['model']} (차원 {meta['dim']}, 카테고리 라벨 {'있음' if meta['with_category'] else '없음'})")
+    print(f"모델 {meta['model']} (차원 {meta['dim']})")
     if not m["pairs"]:
         print("평가할 쌍이 없음")
         return 1
