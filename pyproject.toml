@@ -17,6 +17,13 @@ dependencies = [
     "uvicorn[standard]>=0.53.0",
 ]
 
+[project.optional-dependencies]
+# 장소 선정 모델의 CPU 추론 경로(ADR-0004). 모델 경로를 켜는 환경에서만 설치한다: uv sync --extra model
+model = [
+    "numpy>=2.1",
+    "onnxruntime>=1.20",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

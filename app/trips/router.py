@@ -1,6 +1,9 @@
+import logging
+
 from fastapi import APIRouter, Depends
 
 from app.core.auth import verify_internal_token
+from app.core.config import settings
 from app.trips.schemas.api import (
     E_Response_Status_Code,
     Place_Selection_Request,
@@ -8,8 +11,16 @@ from app.trips.schemas.api import (
     Response,
 )
 from app.trips.schemas.schemas import E_Breaker
+from app.trips.services.model.selection import (
+    model_slot_plan_seed,
+    select_places_by_model,
+)
 from app.trips.services.place_selection import select_places_by_slot_plan
 from app.trips.services.slot_plan import build_slot_plan
+
+logger = logging.getLogger(__name__)
+
+MIN_PLACES = 5  # 모델 경로가 이보다 적게 내면 규칙 경로로 되돌린다
 
 router = APIRouter(
     prefix="/trips",
@@ -36,16 +47,32 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
     4. 저녁 이후 슬롯 빈도 규칙
     """
 
-    # 1. 하루 슬롯 구조 결정 (시간대별 카테고리, 저녁 이후 슬롯 여부)
-    slot_plan = build_slot_plan(request.members)
-
     # 3. 회피조건 취합 (그룹 전체)
     deal_breakers: list[E_Breaker] = []
     for member in request.members:
         deal_breakers.extend(member.deal_breakers)
 
-    # 3. slot plan 순서대로 장소 선택 (후보 부족 시 강등, 보충 포함)
-    places = select_places_by_slot_plan(slot_plan, deal_breakers, request.region, request.members)
+    places = None
+    if settings.place_selection_mode == "model":
+        # 학습한 모델 경로(ADR-0003). 동점 취향은 고정 순서로 처리한다. 어떤 이유로든 실패하면 규칙 경로로 되돌린다
+        try:
+            from app.trips.services.model.runtime import get_router
+
+            model_plan = build_slot_plan(request.members, model_slot_plan_seed())
+            places, route = select_places_by_model(model_plan, deal_breakers, request.region, request.members, get_router())
+            if len(places) < MIN_PLACES:
+                raise ValueError(f"모델 경로 결과 {len(places)}곳 (< {MIN_PLACES})")
+            logger.info("place-selection: model route=%s places=%d", route, len(places))
+        except Exception:
+            logger.exception("모델 경로 실패, 규칙 경로로 되돌림")
+            places = None
+
+    if places is None:
+        # 1. 하루 슬롯 구조 결정 (시간대별 카테고리, 저녁 이후 슬롯 여부)
+        slot_plan = build_slot_plan(request.members)
+
+        # 3. slot plan 순서대로 장소 선택 (후보 부족 시 강등, 보충 포함)
+        places = select_places_by_slot_plan(slot_plan, deal_breakers, request.region, request.members)
 
     return Response[Place_Selection_Response_Data](
         status_code=E_Response_Status_Code.SUCCESS,
