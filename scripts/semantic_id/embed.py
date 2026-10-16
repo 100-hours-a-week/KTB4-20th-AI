@@ -107,8 +107,10 @@ def main(argv: list[str] | None = None) -> int:
     with (args.out_dir / "texts.jsonl").open("w", encoding="utf-8") as f:
         for i in items:
             f.write(json.dumps(i, ensure_ascii=False) + "\n")
+    from scripts.semantic_id.code_dict import hf_revision
+
     meta = {
-        "model": args.model, "dim": int(vectors.shape[1]), "count": len(texts), "device": device,
+        "model": args.model, "revision": hf_revision(args.model), "dim": int(vectors.shape[1]), "count": len(texts), "device": device,
         "text_format": "이름 | 시도 시군구", "seconds": round(elapsed, 1), "batch_size": args.batch_size,
         "created": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         "versions": {"sentence_transformers": sentence_transformers.__version__, "torch": torch.__version__,
