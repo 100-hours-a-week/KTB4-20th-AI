@@ -16,7 +16,10 @@ from pathlib import Path
 
 from app.trips.schemas.schemas import E_Preference, E_Region, Member_Survey, User
 from app.trips.services.model.inference import InferenceRouter, LocalEngine
-from app.trips.services.model.selection import model_slot_plan_seed, select_places_by_model
+from app.trips.services.model.selection import (
+    model_slot_plan_seed,
+    select_places_by_model,
+)
 from app.trips.services.place_selection import select_places_by_slot_plan
 from app.trips.services.slot_plan import build_slot_plan
 
