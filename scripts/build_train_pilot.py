@@ -23,10 +23,10 @@ import random
 from collections import Counter
 from collections.abc import Callable
 
+from scripts.aihub_common import DATASETS
 from scripts.baseline_verify import index_photos, read_photo
 from scripts.build_eval_category import (
     CATEGORIES,
-    DATASETS,
     EVAL_A_LABELS,
     REGIONS,
     TYPE_TO_CATEGORY,
