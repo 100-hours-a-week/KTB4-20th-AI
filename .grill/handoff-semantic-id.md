@@ -9,7 +9,7 @@
 - 머지 완료: #75, #76, #77(2026-10-16). 열린 PR 없음. M3 브랜치는 dev(#77 포함)를 병합한 상태
 - 진행 중 브랜치: `feat/semantic-id-m3-model`(M3 학습·평가, 서빙 코드). 푸시·PR 전. 마감은 2026-10-19(월) 빠르면, 20일(화) 늦어도이며 서빙 3단계(두 경로, 폴백, 콜드 스타트 측정)까지 완료해야 한다
 - 개발용 평가 결과(모델 A 3.37M, 빔 폭 10): Recall@10 모델 13.4%, 인기순 5.5%, 규칙 2.4%. 지역별 판정 규칙(비열세 검정)과 예상 판정은 ADR-0005. 최종용은 2026-10-16에 한 번 열었다(재실행 금지): 5개 지역 모두 규칙 대비 비열세 통과, 전체 우세(Recall@10 모델 13.8%, 인기순 5.9%, 규칙 2.5%). ADR-0003·0005 Accepted, ADR-0000 Superseded. ADR-0004는 RunPod 벤치마크로 기본 경로를 정한 뒤 갱신한다
-- 산출물: `$AIHUB_ROOT/derived/semantic_id/v1/m3/`(places.json, visit_map.json, model_a, model_b, bundle_a, eval). 아직 MANIFEST에 반영하지 않았다
+- 산출물: `$AIHUB_ROOT/derived/semantic_id/v1/m3/`(places.json, visit_map.json, model_a, model_b, bundle_a, eval). `MANIFEST_m3.json`에 기록했고 `--verify` 통과
 - 서빙: RunPod 접근 불가라 `serving/runpod/README.md`의 배포·벤치마크 명령을 사용자가 실행해야 한다
 - 진행: M1과 M2 구현 완료. 임베딩 모델은 BAAI/bge-m3, 텍스트는 `이름 | 시도 시군구`(카테고리 라벨 제외)로 확정했다. 근거와 수치는 ADR-0003과 `.grill/attention-based-place-recommendation.md`
 - 다음 작업: 과제 목록의 **M3(T3-1 입력 토큰 설계부터)**. 사용자의 명시적 승인 후에만 착수한다. 학습은 RunPod Pod에서 하므로 시작 전에 Pod 사양과 데이터 전송 방법을 정한다
@@ -73,14 +73,17 @@ M1·M2가 만든 결과 파일은 레포에 넣지 않고 AI-Hub 원본 옆에 �
 
 ```
 $AIHUB_ROOT/derived/semantic_id/v1/
-    MANIFEST.json     만든 날짜, 레포 커밋, 모델 개정, 시드, 파일별 sha256과 크기
+    MANIFEST.json     만든 날짜, 레포 커밋, 모델 개정, 시드, 파일별 sha256과 크기 (m1, m2, experiments)
+    MANIFEST_m3.json  m3/ 파일의 같은 정보. 기존 MANIFEST는 고치지 않고 추가분은 따로 만든다
     m1/               days.jsonl(하루 단위 학습 예제), funnel.json(단계별 건수), split.json(학습/개발/최종 분할)
     m2/               embed_bgem3_nocat/, rqvae_bgem3_nocat/, code_dictionary.json, pairs_nocat.jsonl
+    m3/               places.json, visit_map.json, model_a/model_b(학습 결과, ONNX), bundle_a(서빙 묶음), eval/(개발용·최종용 평가 결과), logs/
     experiments/      모델 비교와 카테고리 라벨 포함 실험의 근거(Qwen3, 라벨 포함 변형). 학습과 서비스에는 쓰지 않는다
 ```
 
 - 폴더 이름의 `nocat`은 카테고리 라벨이 없는 텍스트라는 뜻이고 확정한 설계다. 라벨을 넣은 변형은 `experiments/`에 있다
 - 설계를 바꿔 다시 만들 때는 `v2`처럼 새 버전 폴더를 만들고 이전 폴더는 덮어쓰지 않는다
+- 폴더에 파일을 더 넣으면 `--name MANIFEST_<이름>.json --include <하위 폴더>`로 추가 MANIFEST를 만든다. `--verify`는 MANIFEST*.json을 모두 읽는다
 - 무결성 확인: `uv run python -m scripts.semantic_id.manifest --version-dir "$AIHUB_ROOT/derived/semantic_id/v1" --verify`
 - `split.json`은 최종용 잠금의 기준이다. 읽을 때는 `scripts/semantic_id/split.py`의 `load_part`를 쓰고, `final`은 `open_final=True`를 명시한 한 번의 평가에서만 연다
 - M3 학습은 `m1/days.jsonl`, `m1/split.json`, `m2/rqvae_bgem3_nocat/`(로그 방문지의 코드), `m2/code_dictionary.json`이 필요하다(합쳐서 약 25MB). RunPod에는 이 파일만 올린다
