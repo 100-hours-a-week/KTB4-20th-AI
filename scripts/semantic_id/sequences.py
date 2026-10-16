@@ -6,7 +6,7 @@
 
 import collections
 
-from scripts.build_eval_category import region_of
+from scripts.aihub_common import region_of
 
 NON_PLACE_TYPES = frozenset({"21", "22", "23", "24"})  # 집, 친구/친지집, 사무실, 숙소
 SCORE_FIELDS = ("DGSTFN", "REVISIT_INTENTION", "RCMDTN_INTENTION")  # 만족도, 재방문 의향, 추천 의향

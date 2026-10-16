@@ -22,7 +22,7 @@ import collections
 import csv
 import pathlib
 
-from scripts.build_eval_category import DATASETS, read_csv_in_zip, region_of
+from scripts.aihub_common import DATASETS, read_csv_in_zip, region_of
 
 # 집, 친구/친지집, 사무실, 숙소: 관광 장소가 아니어서 시퀀스에서 뺀다
 NON_PLACE_TYPES = frozenset({"21", "22", "23", "24"})
