@@ -14,6 +14,7 @@ Date: 2026-10-14
 - 서버: 호스트 2 vCPU, 메모리 3.8GB(여유 약 2.5GB), 컨테이너 메모리 제한은 백엔드 1g·프론트 128m·AI 서버 없음. 백엔드 → AI 서버 타임아웃은 연결 3초, 읽기 30초.
 - GPU는 RunPod를 쓴다. 학습은 Pod를 일시적으로 켜고, 서빙은 Serverless이며 VLM(Qwen2.5-VL-7B)과는 별도 엔드포인트다. GPU 비용은 지원되므로 소프트웨어 관점만 본다.
 - 서빙은 모델 학습과 평가를 끝낸 뒤 진행한다.
+- M1·M2 결과 파일은 레포에 넣지 않고 `$AIHUB_ROOT/derived/semantic_id/v1/`에 버전 폴더로 보관한다(`MANIFEST.json`으로 해시 확인). 여행자 ID와 좌표가 있고 AI-Hub 재배포 약관을 확인하지 못했기 때문이다.
 
 ## Key decisions
 - Decision: ADR-0000을 대체할 새 ADR을 쓴다(ADR-0003). 대체는 평가 통과 후 확정한다. Reason: ADR-0000이 새 ADR 선행을 요구하고, 대체의 근거를 평가로 보이는 것이 설계 취지다. Alternative considered: 규칙 + LLM 보완(ADR-0000에서 기각).
