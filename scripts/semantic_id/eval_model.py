@@ -93,11 +93,11 @@ def evaluate(examples: list[dict], by_region: dict[str, list[dict]], next_logpro
                 header, plan = service_header_and_plan(ex["preference"], region)
                 category = plan[j] if j < len(plan) else None
 
-                def allowed(p, category=category, j=j):
+                def allowed(p, category=category, j=j, top_two=frozenset((plan[0], plan[3]))):
                     if mode == "rule-slots" or category in ("FOOD", "ACTIVITY") and j in FIXED_SLOTS:
                         return category in p["categories"]
                     if mode == "top2-slots":
-                        return bool(set(p["categories"]) & {plan[0], plan[3]})  # 취향 상위 둘 카테고리 안에서 모델이 고른다
+                        return bool(set(p["categories"]) & top_two)  # 취향 상위 둘 카테고리 안에서 모델이 고른다
                     return any(c != "FOOD" for c in p["categories"])  # 모델이 FOOD 아닌 카테고리 전체에서 고른다
 
                 candidates = {p["google_place_id"]: p["code"] for p in pool if allowed(p) and p["google_place_id"] not in used}
