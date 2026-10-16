@@ -154,7 +154,7 @@ def test_from_b_reads_answer_and_regrades_with_current_rule():
     record = {
         "eval_set": "B_aug", "photo": "a.jpg", "place": "황리단길", "category": "음식", "truth": "success",
         "model": "qwen", "format": "question", "parsed": True, "grade": "fail",
-        "answer": {"judgeable": "yes", "target": "enough", "condition": "yes", "place": "unknown"},
+        "answer": {"judgeable": "yes", "target": "enough", "condition": "yes", "place": "na"},
     }
     [case] = from_b([record])
     assert case.match_score is None
