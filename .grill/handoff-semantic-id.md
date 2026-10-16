@@ -4,10 +4,11 @@
 
 ## 1. 변동 상태 (이 절만 자주 바뀐다)
 
-- 마지막 갱신: 2026-10-15, 기준 커밋(`dev`): `4c1c76b` (이 값을 믿지 말고 아래 점검 명령으로 확인한다)
-- 머지 완료: PR #69(ADR 3건과 로그), #70(품질 하한, 중복 장소 방지, README 표, CI 덤프), #71(하루 단위 시퀀스 측정 스크립트), #68(photomission verify 백엔드 전환, 다른 팀원의 PR)
-- 열린 PR: #73(과제 목록과 로그의 머지 상태 반영), #74(이 핸드오프 문서와 ADR 승인 조건 정리). 머지는 리뷰어가 한다
-- 다음 작업: 과제 목록의 **T1-1(M1 데이터 로더)**. 사용자의 명시적 승인 후에만 착수한다
+- 마지막 갱신: 2026-10-16, 기준 커밋(`dev`): `3bc6645` (이 값을 믿지 말고 아래 점검 명령으로 확인한다)
+- 머지 완료: PR #69(ADR 3건과 로그), #70(품질 하한, 중복 장소 방지, README 표, CI 덤프), #71(하루 단위 시퀀스 측정 스크립트), #73, #74(이 문서와 ADR 승인 조건), #72와 #68(photomission, 다른 팀원의 PR)
+- 열린 PR: #75(M1 데이터 파이프라인, 과제 T1-1~T1-8). #76(M2, 과제 T2-1~T2-6)은 M1 위에 쌓여 있어 #75를 먼저 보아야 한다. 머지는 리뷰어가 한다
+- 진행: M1과 M2 구현 완료. 임베딩 모델은 BAAI/bge-m3, 텍스트는 `이름 | 시도 시군구`(카테고리 라벨 제외)로 확정했다. 근거와 수치는 ADR-0003과 `.grill/attention-based-place-recommendation.md`
+- 다음 작업: 과제 목록의 **M3(T3-1 입력 토큰 설계부터)**. 사용자의 명시적 승인 후에만 착수한다. 학습은 RunPod Pod에서 하므로 시작 전에 Pod 사양과 데이터 전송 방법을 정한다
 - 로컬 브랜치 정리는 사용자가 직접 한다(머지된 브랜치를 건드리지 않는다)
 
 ### 시작할 때 상태 점검 명령
@@ -62,6 +63,25 @@ $AIHUB_ROOT/277.국내_여행로그_데이터(수도권)_Validation/01-1.정식�
 - 현재 실행 방법: `uv run python -m scripts.measure_travel_sequences --label-zip <8개 경로>`(레포 루트에서). `--aihub`는 다른 폴더 구조(`<aihub>/277_수도권/…/TL_csv.zip`)용이라 이 데이터에는 쓰지 않는다
 - Training과 Validation은 같은 여행의 방문을 나눈 것이다. 합쳐야 여행이 온전해진다
 
+### 파생 산출물 보관 위치 (잊지 말 것)
+
+M1·M2가 만든 결과 파일은 레포에 넣지 않고 AI-Hub 원본 옆에 버전 폴더로 보관한다. 여행자 ID와 좌표가 있고 AI-Hub 약관상 재배포 가능 여부를 확인하지 못했기 때문이다.
+
+```
+$AIHUB_ROOT/derived/semantic_id/v1/
+    MANIFEST.json     만든 날짜, 레포 커밋, 모델 개정, 시드, 파일별 sha256과 크기
+    m1/               days.jsonl(하루 단위 학습 예제), funnel.json(단계별 건수), split.json(학습/개발/최종 분할)
+    m2/               embed_bgem3_nocat/, rqvae_bgem3_nocat/, code_dictionary.json, pairs_nocat.jsonl
+    experiments/      모델 비교와 카테고리 라벨 포함 실험의 근거(Qwen3, 라벨 포함 변형). 학습과 서비스에는 쓰지 않는다
+```
+
+- 폴더 이름의 `nocat`은 카테고리 라벨이 없는 텍스트라는 뜻이고 확정한 설계다. 라벨을 넣은 변형은 `experiments/`에 있다
+- 설계를 바꿔 다시 만들 때는 `v2`처럼 새 버전 폴더를 만들고 이전 폴더는 덮어쓰지 않는다
+- 무결성 확인: `uv run python -m scripts.semantic_id.manifest --version-dir "$AIHUB_ROOT/derived/semantic_id/v1" --verify`
+- `split.json`은 최종용 잠금의 기준이다. 읽을 때는 `scripts/semantic_id/split.py`의 `load_part`를 쓰고, `final`은 `open_final=True`를 명시한 한 번의 평가에서만 연다
+- M3 학습은 `m1/days.jsonl`, `m1/split.json`, `m2/rqvae_bgem3_nocat/`(로그 방문지의 코드), `m2/code_dictionary.json`이 필요하다(합쳐서 약 25MB). RunPod에는 이 파일만 올린다
+- 다시 만드는 순서(각 스크립트의 docstring에 명령이 있다): `build_days` → `split` → `embed`(BGE-M3) → `rqvae` → `code_dict`. 정렬 검증은 `pairs`, `eval_retrieval`, `eval_codes`, 투영 측정은 `project_logs`
+
 ## 6. M1 구현 사양 (확정)
 
 - 코드 위치: `scripts/semantic_id/` 아래에 기능별로 나눈다(로더, 시퀀스, 취향 벡터, 분할). 기존 `scripts/` 관례를 따른다
@@ -93,10 +113,11 @@ $AIHUB_ROOT/277.국내_여행로그_데이터(수도권)_Validation/01-1.정식�
 
 ## 9. 열린 항목 (미확인 또는 미결)
 
-- BGE-M3 라이선스(기억상 MIT, 확인 필요), Qwen3-Embedding-0.6B는 Apache 2.0 확인됨
+- 로그 방문지를 DB에 비슷한 장소가 없다고 보아 정답에서 빼는 임계값: DB 장소끼리 가장 가까운 유사도의 하위 5%(0.607)로 확정(방문의 11.5% 제외). 학습 데이터를 만들 때 적용한다
+- 이름 표면 차이(띄어쓰기, 지점 표기)로 정답 쌍의 38%가 같은 코드를 받지 못한다. M3 평가에서 영향이 확인되면 텍스트 정리를 재검토한다
 - 여행 미션 코드가 참가자가 고른 것인지 과제로 주어진 것인지(카테고리정의서.xlsx 확보 시 확인, `TRAVEL_STYL` 정의도 같은 파일에 있을 것으로 추정)
 - RunPod payload 제한과 호출 방식, 콜드 스타트 시 오류 형태(타임아웃 또는 읽기 시간 초과)
-- 연속 거리 기준 미달 시 반경 제한 R의 값, 정렬 합격 기준 수치, 빔 폭, 서비스 기본 서빙 경로, 모델 재학습 기준
+- 연속 거리 기준 미달 시 반경 제한 R의 값, 빔 폭, 서비스 기본 서빙 경로, 모델 재학습 기준
 
 ## 10. 이 문서의 갱신 규칙
 
