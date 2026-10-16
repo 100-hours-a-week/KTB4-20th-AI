@@ -171,6 +171,15 @@ def test_summary_threshold_blocks_low_confidence_yes():
     assert "기준 0.90: 닮은 장소 통과 0/2 (0.0%) · 맞는 장소 성공 1/2 (50.0%)" in text
 
 
+def test_summary_regrades_from_answer_not_stored_grade():
+    # 옛 규칙으로 저장된 grade(모름 → 성공)를 믿지 않고 지금 규칙(모름 → 재시도)으로 다시 센다
+    records = [_q("negative", "unknown", "success", 0.95), _q("negative", "yes", "success", 0.95)]
+    text = "\n".join(summarize(records))
+    assert "등급 {'retry': 1, 'success': 1}" in text
+    assert "닮은 장소 통과(성공 판정) 1/2 (50.0%)" in text
+    assert "기준 0.50: 닮은 장소 통과 1/2 (50.0%)" in text
+
+
 def test_summary_identify_accuracy_per_place():
     records = [{"place": "월정교", "parsed": True, "model_sec": 1.0, "identify": "woljeonggyo"},
                {"place": "월정교", "parsed": True, "model_sec": 1.0, "identify": "donggung_wolji"},

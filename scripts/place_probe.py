@@ -160,6 +160,11 @@ def _pct(n: int, d: int) -> str:
     return f"{n}/{d} ({n / d:.1%})" if d else "0/0"
 
 
+def _grade(r: dict) -> str:
+    # 기록 당시 grade가 아니라 답 원본에서 지금 규칙으로 다시 정한다 (eval_cases·baseline_verify와 같게)
+    return rule_grade(QuestionAnswer.model_validate(r["answer"]))
+
+
 def summarize(records: list[dict]) -> list[str]:
     ok = [r for r in records if "error" not in r and r.get("parsed")]
     lines = [f"기록 {len(records)}건 / 형식 통과 {len(ok)}건"]
@@ -186,12 +191,12 @@ def summarize(records: list[dict]) -> list[str]:
         if not rs:
             continue
         places = collections.Counter(r["answer"]["place"] for r in rs)
-        grades = collections.Counter(r["grade"] for r in rs)
+        grades = collections.Counter(_grade(r) for r in rs)
         lines.append(f"[{kind}] {len(rs)}건 · 장소 답 {dict(places)} · 등급 {dict(grades)}")
     neg = [r for r in ok if r["kind"] == "negative" and "answer" in r]
     pos = [r for r in ok if r["kind"] == "positive" and "answer" in r]
-    lines.append(f"닮은 장소 통과(성공 판정) {_pct(sum(r['grade'] == 'success' for r in neg), len(neg))}"
-                 f" · 맞는 장소 성공 판정 {_pct(sum(r['grade'] == 'success' for r in pos), len(pos))}")
+    lines.append(f"닮은 장소 통과(성공 판정) {_pct(sum(_grade(r) == 'success' for r in neg), len(neg))}"
+                 f" · 맞는 장소 성공 판정 {_pct(sum(_grade(r) == 'success' for r in pos), len(pos))}")
 
     probs = [r for r in ok if r.get("place_probs") and "answer" in r]
     if probs:
@@ -199,7 +204,7 @@ def summarize(records: list[dict]) -> list[str]:
         lines.append("[확률 기준] 장소 '예' 확률 < 기준값이면 실패로 볼 때")
         for th in THRESHOLDS:
             def passed(r: dict, th: float = th) -> bool:
-                return r["grade"] == "success" and r["place_probs"]['"yes"'] >= th
+                return _grade(r) == "success" and r["place_probs"]['"yes"'] >= th
             n = [r for r in probs if r["kind"] == "negative"]
             p = [r for r in probs if r["kind"] == "positive"]
             lines.append(f"  기준 {th:.2f}: 닮은 장소 통과 {_pct(sum(map(passed, n)), len(n))}"
