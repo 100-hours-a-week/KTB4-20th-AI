@@ -8,7 +8,8 @@
 - 머지 완료: PR #69(ADR 3건과 로그), #70(품질 하한, 중복 장소 방지, README 표, CI 덤프), #71(하루 단위 시퀀스 측정 스크립트), #73, #74(이 문서와 ADR 승인 조건), #72와 #68(photomission, 다른 팀원의 PR)
 - 머지 완료: #75, #76, #77(2026-10-16). 열린 PR 없음. M3 브랜치는 dev(#77 포함)를 병합한 상태
 - 진행 중 브랜치: `feat/semantic-id-m3-model`(M3 학습·평가, 서빙 코드). 푸시·PR 전. 마감은 2026-10-19(월) 빠르면, 20일(화) 늦어도이며 서빙 3단계(두 경로, 폴백, 콜드 스타트 측정)까지 완료해야 한다
-- 개발용 평가 결과(모델 A 3.37M, 빔 폭 10): Recall@10 모델 13.4%, 인기순 5.5%, 규칙 2.4%. 지역별 판정 규칙(비열세 검정)과 예상 판정은 ADR-0005. 최종용은 2026-10-16에 한 번 열었다(재실행 금지): 5개 지역 모두 규칙 대비 비열세 통과, 전체 우세(Recall@10 모델 13.8%, 인기순 5.9%, 규칙 2.5%). ADR-0003·0005 Accepted, ADR-0000 Superseded. ADR-0004는 RunPod 벤치마크로 기본 경로를 정한 뒤 갱신한다
+- PR #78 리뷰(`jiyoung720`) 반영: 평가(free)와 서비스 조건이 달랐다. 서비스 후보 제한을 ADR-0006(FOOD가 아닌 슬롯은 취향 상위 두 카테고리)으로 정했고 `selection.py`와 `eval_model --mode top2-slots`에 반영했다. 최종용은 free 조건으로 1회 열었고 top2-slots 조건으로는 아직 재지 않았다(재측정 여부는 미정)
+- 개발용 평가 결과(모델 A 3.37M, 빔 폭 10, free 조건): Recall@10 모델 13.4%, 인기순 5.5%, 규칙 2.4%. 지역별 판정 규칙(비열세 검정)과 예상 판정은 ADR-0005. 최종용은 2026-10-16에 한 번 열었다(재실행 금지): 5개 지역 모두 규칙 대비 비열세 통과, 전체 우세(Recall@10 모델 13.8%, 인기순 5.9%, 규칙 2.5%). ADR-0003·0005 Accepted, ADR-0000 Superseded. ADR-0004는 RunPod 벤치마크로 기본 경로를 정한 뒤 갱신한다
 - 산출물: `$AIHUB_ROOT/derived/semantic_id/v1/m3/`(places.json, visit_map.json, model_a, model_b, bundle_a, eval). `MANIFEST_m3.json`에 기록했고 `--verify` 통과
 - 서빙: RunPod 접근 불가라 `serving/runpod/README.md`의 배포·벤치마크 명령을 사용자가 실행해야 한다
 - 진행: M1과 M2 구현 완료. 임베딩 모델은 BAAI/bge-m3, 텍스트는 `이름 | 시도 시군구`(카테고리 라벨 제외)로 확정했다. 근거와 수치는 ADR-0003과 `.grill/attention-based-place-recommendation.md`

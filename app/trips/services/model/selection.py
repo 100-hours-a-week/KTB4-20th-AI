@@ -1,7 +1,7 @@
 """학습한 모델로 장소를 고른다 (ADR-0003). 규칙 경로(place_selection.py)와 같은 입력·출력 모양이다.
 
-후보 제한은 ADR-0003이 정한 대로다: 점심·저녁(2·5번째)은 FOOD, 저녁 이후(6번째)는 야간형 ACTIVITY이고,
-나머지 슬롯은 FOOD가 아닌 카테고리 전체(역사·문화, 자연·힐링, 액티비티, 편의·쇼핑)에서 모델이 고른다.
+후보 제한은 ADR-0003과 ADR-0006이 정한 대로다: 점심·저녁(2·5번째)은 FOOD, 저녁 이후(6번째)는 야간형 ACTIVITY이고,
+나머지 슬롯은 그룹 취향 상위 두 카테고리의 합집합에서 모델이 고른다(어느 카테고리의 어느 장소인지는 모델이 정한다).
 규칙 경로처럼 슬롯마다 카테고리를 정하지 않는다. 회피조건과 품질 필터는 규칙 경로와 같은 DB 조회를 그대로 쓴다.
 모델은 후보 중 무엇을 고를지만 정한다. 후보 밖 장소는 낼 수 없다.
 """
@@ -55,10 +55,10 @@ def select_places_by_model(
                 pools[key] = get_DB_places_by_category(category, POOL_LIMIT, region, excluded_types=excluded)
         return pools[key]
 
-    # FOOD가 아닌 슬롯의 후보: 주간 카테고리 4개의 합집합. 장소마다 취향 순위가 가장 높은 소속 카테고리로 표시한다
+    # FOOD가 아닌 슬롯의 후보: 취향 상위 두 카테고리의 합집합. 장소마다 취향 순위가 높은 소속 카테고리로 표시한다
     daytime_pool: list[Place] = []
     daytime_category: dict[str, E_Preference] = {}
-    for category in slot_plan.daytime_category_ranking:
+    for category in slot_plan.daytime_category_ranking[:2]:
         for place in pool_for(category, False):
             if place.id not in daytime_category:
                 daytime_category[place.id] = category

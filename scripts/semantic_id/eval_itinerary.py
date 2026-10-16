@@ -1,6 +1,6 @@
 """일정 단위 품질 지표를 잰다 (M4 T4-1, ADR-0005 보고 지표).
 
-Recall은 정답 방문을 맞히는지만 본다. 여기서는 개발용 하루마다 서비스처럼 5곳을 만들어(모델은 food-slots 조건, 규칙은 규칙 슬롯)
+Recall은 정답 방문을 맞히는지만 본다. 여기서는 개발용 하루마다 서비스처럼 5곳을 만들어(모델은 top2-slots 조건, 규칙은 규칙 슬롯)
 다음을 비교한다. 실제 로그의 같은 날 방문(앞 5곳)을 참고값으로 함께 적는다.
 
   카테고리 일치도   FOOD가 아닌 추천 중 그 날 취향 상위 둘 카테고리에 속하는 비율
@@ -73,7 +73,7 @@ def build_itineraries(examples, by_region, next_logprobs):
         header, plan = service_header_and_plan(ex["preference"], ex["region"])
         codes = {p["google_place_id"]: p["code"] for p in pool}
         food = [p["google_place_id"] for p in pool if "FOOD" in p["categories"]]
-        day = [p["google_place_id"] for p in pool if any(c != "FOOD" for c in p["categories"])]
+        day = [p["google_place_id"] for p in pool if set(p["categories"]) & {plan[0], plan[3]}]  # 취향 상위 둘(top2-slots)
         slots = [food if cat == "FOOD" else day for cat in plan[:5]]
         chosen = generate_itinerary(header, slots, codes, next_logprobs)
         model_its.append([g for g in chosen if g])
