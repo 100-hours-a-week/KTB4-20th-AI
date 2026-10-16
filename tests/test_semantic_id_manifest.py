@@ -40,3 +40,24 @@ def test_verify_detects_changed_missing_and_extra_files(tmp_path, capsys):
     assert "없는 파일: m2/codes.npy" in problems
     assert "MANIFEST에 없는 파일: m2/new.json" in problems
     assert manifest.main(["--version-dir", str(tmp_path), "--verify"]) == 1
+
+
+def test_second_manifest_covers_added_folder_and_verify_reads_both(tmp_path):
+    _make(tmp_path)
+    manifest.main(["--version-dir", str(tmp_path)])
+    first = (tmp_path / "MANIFEST.json").read_text(encoding="utf-8")
+    (tmp_path / "m3").mkdir()
+    (tmp_path / "m3" / "model.onnx").write_bytes(b"onnx")
+    assert manifest.verify(tmp_path) == ["MANIFEST에 없는 파일: m3/model.onnx"]
+    assert manifest.main(["--version-dir", str(tmp_path), "--name", "MANIFEST_m3.json", "--include", "m3"]) == 0
+    assert (tmp_path / "MANIFEST.json").read_text(encoding="utf-8") == first  # 기존 MANIFEST는 그대로
+    assert set(json.loads((tmp_path / "MANIFEST_m3.json").read_text(encoding="utf-8"))["files"]) == {"m3/model.onnx"}
+    assert manifest.verify(tmp_path) == []
+    (tmp_path / "m3" / "model.onnx").write_bytes(b"changed")
+    assert manifest.verify(tmp_path) == ["내용이 다름: m3/model.onnx"]
+
+
+def test_main_rejects_bad_name_and_empty_include(tmp_path, capsys):
+    _make(tmp_path)
+    assert manifest.main(["--version-dir", str(tmp_path), "--name", "other.json"]) == 1
+    assert manifest.main(["--version-dir", str(tmp_path), "--name", "MANIFEST_x.json", "--include", "nothing"]) == 1
