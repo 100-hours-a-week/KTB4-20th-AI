@@ -57,6 +57,12 @@ def summarize(rows: list[dict], field: str) -> dict:
     }
 
 
+def count_failed(rows: list[dict]) -> int:
+    # 끝내 미션을 못 받은 사진 수. 실패한 묶음을 다시 실행해 성공하면 실패 줄이 파일에 남아 있어도 세지 않는다
+    succeeded = {r["photo"] for r in rows if "error" not in r}
+    return len({r["photo"] for r in rows if "error" in r} - succeeded)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("missions", type=pathlib.Path, help="generate_eval_missions.py가 만든 JSONL")
@@ -65,8 +71,11 @@ def main() -> None:
     args = ap.parse_args()
 
     rows = [json.loads(line) for line in args.missions.read_text(encoding="utf-8").splitlines() if line.strip()]
-    rows = [r for r in rows if "error" not in r]
-    print(json.dumps(summarize(rows, args.field), ensure_ascii=False, indent=1))
+    ok = [r for r in rows if "error" not in r]
+    # 실패 줄은 경고 집계에서 빠지므로 실패 수를 같이 보고한다. 어려운 묶음이 실패하면 경고율이 좋아 보일 수 있다
+    # 여러 실행 파일을 합치지 말고 실행마다 따로 돌린다 (batch 이름이 실행 사이에 겹친다)
+    print(json.dumps({**summarize(ok, args.field), "errors": count_failed(rows)}, ensure_ascii=False, indent=1))
+    rows = ok
     if args.show:
         for r in rows:
             if found := warnings(r[args.field]):

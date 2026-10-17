@@ -1,7 +1,7 @@
 import pytest
 
 from app.photomissions.prompts import MISSION_SYSTEM_PROMPT
-from scripts.mission_lint import summarize, warnings
+from scripts.mission_lint import count_failed, summarize, warnings
 
 
 @pytest.mark.parametrize(
@@ -106,3 +106,12 @@ def test_positive_prompt_examples_have_no_lint_warning():
         assert description in MISSION_SYSTEM_PROMPT, description
     for description in good + PROMPT_POSITIVE_EXAMPLES:
         assert warnings(description) == [], description
+
+
+def test_failed_count_ignores_batches_that_succeeded_on_rerun():
+    rows = [
+        {"photo": "a.jpg", "error": "502"},  # 처음 실패, 다시 실행해 성공
+        {"photo": "b.jpg", "error": "502"},  # 끝내 실패
+        {"photo": "a.jpg", "mission_description": "기와지붕 크게 찍기"},
+    ]
+    assert count_failed(rows) == 1
