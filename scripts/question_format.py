@@ -1,9 +1,11 @@
 """verify 객관식 형식 (개선 ② 실험, 학습 데이터).
 
 모델은 점수 대신 질문 네 개에 답하고, 등급은 서버가 규칙으로 정한다 (2026-10-04 웨일과 결정).
-규칙은 docs/photomissions/label_criteria.md와 학습 데이터 표시 화면의 ruleGrade와 같다.
+규칙은 docs/photomissions/label_criteria.md와 같다.
   판단 불가 · 다른 장소 · 대상 없음 → 실패 / 대상 부족 · 조건 안 지킴 · 장소 모름 → 재시도 / 나머지 → 성공
 장소 모름 → 재시도는 2026-10-16에 더했다. 그 전에는 모름도 성공이었다 (evaluation.md 2절).
+같은 규칙이 레포 밖(T7 $AIHUB) 표시 화면 두 곳에도 있다: train/pilot/labeling/index.html의 ruleGrade,
+lookalike/relabel.html의 gradeOf. 사진 옆에 두는 로컬 도구라 테스트로 묶여 있지 않으니, 규칙을 바꾸면 두 화면도 직접 맞춘다.
 """
 
 import json

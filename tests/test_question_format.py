@@ -22,7 +22,7 @@ from scripts.question_format import QuestionAnswer, normalize, rule_grade, to_ex
     ],
 )
 def test_rule_grade_matches_labeling_screen(answer, grade):
-    # 표시 화면(index.html)의 ruleGrade와 같은 규칙이어야 한다
+    # 레포 밖 표시 화면(labeling/index.html ruleGrade, lookalike/relabel.html gradeOf)과 같은 규칙이어야 한다. 화면은 직접 맞춘다
     assert rule_grade(QuestionAnswer(**{"target": None, "condition": None, "place": None, **answer})) == grade
 
 
