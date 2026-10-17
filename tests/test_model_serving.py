@@ -143,3 +143,33 @@ def test_selection_limits_non_food_slots_to_top_two_preference_categories(monkey
     assert seen["slots"][1] == seen["slots"][4] == ["f1", "f2"]
     assert route == "cpu" and len(places) == len(plan.items)
     assert all(E_Preference.FOOD in p.matched_preferences for i, p in enumerate(places) if i in (1, 4))
+
+
+def test_selection_adds_next_ranked_category_when_top_two_have_too_few_places(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.trips.schemas.schemas import E_Region, Member_Survey, User
+    from app.trips.services.model import selection
+    from app.trips.services.slot_plan import build_slot_plan
+
+    def place(gid):
+        return SimpleNamespace(id=gid, matched_preferences=[], selected_for=[])
+
+    members = [Member_Survey(user=User(user_id="u"), survey_result=[5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1])]
+    plan = build_slot_plan(members, selection.model_slot_plan_seed())
+    first, second, third = (c.value for c in plan.daytime_category_ranking[:3])
+    pools = {c.value: [] for c in plan.daytime_category_ranking}
+    pools["FOOD"] = [place("f1"), place("f2")]
+    pools[first] = [place("x1")]  # 상위 둘을 합쳐도 3곳이 안 된다
+    pools[third] = [place("y1"), place("y2")]
+    monkeypatch.setattr(selection, "get_DB_places_by_category", lambda category, limit, region, **kw: list(pools[category.value]))
+    seen, trace = {}, {}
+
+    class FakeRouter:
+        def generate(self, header, slots, width=10):
+            seen["slots"] = slots
+            return [s[0] if s else None for s in slots], "cpu"
+
+    selection.select_places_by_model(plan, [], E_Region.SEOUL, members, FakeRouter(), trace=trace)
+    assert trace["daytime_categories"] == [first, second, third]
+    assert set(seen["slots"][0]) == {"x1", "y1", "y2"}
