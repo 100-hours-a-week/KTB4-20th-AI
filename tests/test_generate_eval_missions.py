@@ -2,12 +2,15 @@ import asyncio
 import json
 
 import pytest
+from fastapi import HTTPException
+from google.genai import errors
 
 from app.photomissions import pipeline_generate
 from app.photomissions.prompts import MISSION_SYSTEM_PROMPT
 from app.photomissions.schemas import MissionBatch, MissionDescription
 from scripts.generate_eval_missions import (
     PROMPTS,
+    describe_cause,
     main,
     make_batches,
     plan_sha,
@@ -186,3 +189,20 @@ def test_compare_dry_run_uses_dev_only(manifest_and_split, tmp_path, capsys, mon
     printed = capsys.readouterr().out
     assert "사진 3장" in printed and "final식당" not in printed
     assert not out.exists() and not out.with_name(out.name + ".meta.json").exists()  # dry-run은 아무것도 쓰지 않는다
+
+
+def _http_error_from(cause):
+    try:
+        raise HTTPException(status_code=502, detail="미션 문구 생성 실패") from cause
+    except HTTPException as e:
+        return e
+
+
+def test_failed_line_keeps_original_cause():
+    # 서비스는 원인을 숨기므로, 측정 결과에는 Gemini 에러 코드나 검증 실패 이유를 남긴다
+    api = errors.ServerError(503, {"error": {"code": 503, "status": "UNAVAILABLE", "message": "overloaded"}})
+    assert describe_cause(_http_error_from(api)) == "ServerError 503 UNAVAILABLE: overloaded"
+    assert describe_cause(_http_error_from(ValueError("Gemini 응답이 요청 내용과 맞지 않음"))) == (
+        "ValueError: Gemini 응답이 요청 내용과 맞지 않음"
+    )
+    assert describe_cause(HTTPException(status_code=502)) == ""

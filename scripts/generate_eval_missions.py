@@ -33,6 +33,7 @@ import sys
 from collections import defaultdict
 
 from fastapi import HTTPException
+from google.genai import errors
 
 from app.photomissions import gemini_client, pipeline_generate
 from app.photomissions.pipeline_generate import generate_missions
@@ -139,6 +140,16 @@ def sample_places(rows: list[dict], n: int, seed: int) -> list[dict]:
     return picked
 
 
+def describe_cause(e: HTTPException) -> str:
+    # 서비스는 원인을 숨기고 "미션 문구 생성 실패"만 돌려주므로, 측정에서는 원래 에러를 같이 남긴다
+    cause = e.__cause__
+    if cause is None:
+        return ""
+    if isinstance(cause, errors.APIError):
+        return f"{type(cause).__name__} {cause.code} {cause.status}: {str(cause.message)[:200]}"
+    return f"{type(cause).__name__}: {str(cause)[:200]}"
+
+
 def to_request(batch: list[dict], batch_id: str) -> PhotoMissionGenerateRequest:
     # 장소 ID는 사진 파일명을 쓴다. 평가 단위가 사진 1장이고, 같은 방문지 사진이 여러 장일 수 있어서다
     return PhotoMissionGenerateRequest(
@@ -216,9 +227,11 @@ async def main(argv: list[str] | None = None) -> None:
                 ]
                 result = " / ".join(line["mission_description"] for line in lines)
             except HTTPException as e:  # 측정 스크립트라 실패도 기록하고 다음 묶음으로 넘어간다
-                lines = [{"photo": row["photo"], "batch": batch_id, "error": f"{e.status_code}: {e.detail}", **(expect or {})}
+                cause = describe_cause(e)
+                lines = [{"photo": row["photo"], "batch": batch_id, "error": f"{e.status_code}: {e.detail}",
+                          "cause": cause, **(expect or {})}
                          for row in batch]
-                result = f"에러 {e.status_code}"
+                result = f"에러 {e.status_code} ({cause})"
             for line in lines:
                 f.write(json.dumps(line, ensure_ascii=False) + "\n")
             f.flush()
