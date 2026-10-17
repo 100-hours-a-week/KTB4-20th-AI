@@ -13,6 +13,10 @@ MANIFEST.json에 남긴다. 파일마다 sha256과 크기를 적는다.
 
   uv run python -m scripts.semantic_id.manifest --version-dir "$V" --name MANIFEST_m3.json --include m3 --note "..."
 
+같은 폴더에 그 뒤로 새 파일만 생겼다면 --only-new로 기존 MANIFEST에 없는 파일만 담는다:
+
+  uv run python -m scripts.semantic_id.manifest --version-dir "$V" --name MANIFEST_m3b.json --only-new --note "..."
+
 --verify는 폴더의 MANIFEST*.json을 모두 읽어 합친 목록과 실제 파일을 대조한다(같은 파일이 두 MANIFEST에 있으면 오류).
 """
 
@@ -46,8 +50,20 @@ def list_files(root: pathlib.Path, include: str | None = None) -> list[pathlib.P
     return files
 
 
-def file_table(root: pathlib.Path, include: str | None = None) -> dict[str, dict]:
-    return {str(p.relative_to(root)): {"sha256": sha256_of(p), "bytes": p.stat().st_size} for p in list_files(root, include)}
+def listed_files(root: pathlib.Path) -> set[str]:
+    # 폴더의 MANIFEST*.json에 이미 적힌 파일 이름
+    names: set[str] = set()
+    for path in root.iterdir():
+        if is_manifest(path):
+            names |= set(json.loads(path.read_text(encoding="utf-8"))["files"])
+    return names
+
+
+def file_table(root: pathlib.Path, include: str | None = None, skip: set[str] | None = None) -> dict[str, dict]:
+    return {
+        str(p.relative_to(root)): {"sha256": sha256_of(p), "bytes": p.stat().st_size}
+        for p in list_files(root, include) if str(p.relative_to(root)) not in (skip or set())
+    }
 
 
 def git_commit() -> str | None:
@@ -78,13 +94,13 @@ def verify(root: pathlib.Path) -> list[str]:
     return problems
 
 
-def build(root: pathlib.Path, note: str, extra: dict | None = None, include: str | None = None) -> dict:
+def build(root: pathlib.Path, note: str, extra: dict | None = None, include: str | None = None, skip: set[str] | None = None) -> dict:
     return {
         "created": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds"),
         "repo_commit": git_commit(),
         "note": note,
         **(extra or {}),
-        "files": file_table(root, include),
+        "files": file_table(root, include, skip),
     }
 
 
@@ -95,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--info", type=pathlib.Path, help="MANIFEST에 그대로 넣을 설정 JSON (모델, 시드 등)")
     ap.add_argument("--name", default=MANIFEST, help="만들 MANIFEST 파일 이름 (MANIFEST*.json)")
     ap.add_argument("--include", help="이 하위 폴더의 파일만 담는다 (예: m3)")
+    ap.add_argument("--only-new", action="store_true", help="기존 MANIFEST*.json에 이미 있는 파일은 빼고 새 파일만 담는다")
     ap.add_argument("--verify", action="store_true", help="만들지 않고 기존 MANIFEST와 파일이 같은지 확인한다")
     args = ap.parse_args(argv)
     root = args.version_dir
@@ -109,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"이미 있어서 덮어쓰지 않음: {root / args.name} (새 이름이나 새 버전 폴더를 만든다)", file=sys.stderr)
         return 1
     extra = json.loads(args.info.read_text(encoding="utf-8")) if args.info else None
-    manifest = build(root, args.note, extra, args.include)
+    manifest = build(root, args.note, extra, args.include, listed_files(root) if args.only_new else None)
     if not manifest["files"]:
         print("담을 파일이 없음", file=sys.stderr)
         return 1
