@@ -13,11 +13,16 @@ from scripts.question_format import QuestionAnswer, normalize, rule_grade, to_ex
         ({"judgeable": "yes", "target": "none", "place": "na"}, "fail"),
         ({"judgeable": "yes", "target": "short", "condition": "yes", "place": "yes"}, "retry"),
         ({"judgeable": "yes", "target": "enough", "condition": "no", "place": "na"}, "retry"),
-        ({"judgeable": "yes", "target": "enough", "condition": "na", "place": "unknown"}, "success"),
+        ({"judgeable": "yes", "target": "enough", "condition": "na", "place": "unknown"}, "retry"),
+        ({"judgeable": "yes", "target": "short", "condition": "yes", "place": "unknown"}, "retry"),
+        ({"judgeable": "yes", "target": "enough", "condition": "no", "place": "unknown"}, "retry"),
+        ({"judgeable": "yes", "target": "none", "place": "unknown"}, "fail"),  # 대상 없음이 모름보다 먼저
+        ({"judgeable": "yes", "target": "enough", "condition": "yes", "place": "yes"}, "success"),
+        ({"judgeable": "yes", "target": "enough", "condition": "na", "place": "na"}, "success"),
     ],
 )
 def test_rule_grade_matches_labeling_screen(answer, grade):
-    # 표시 화면(index.html)의 ruleGrade와 같은 규칙이어야 한다
+    # 레포 밖 표시 화면(labeling/index.html ruleGrade, lookalike/relabel.html gradeOf)과 같은 규칙이어야 한다. 화면은 직접 맞춘다
     assert rule_grade(QuestionAnswer(**{"target": None, "condition": None, "place": None, **answer})) == grade
 
 
