@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     self_retry_threshold: float | None = None
     self_landmark_threshold: float | None = None
 
+    # 장소 선정 방식. rule(ADR-0000 규칙, 기본) / model(학습한 모델, ADR-0003). 모델 경로가 실패하면 규칙으로 되돌린다
+    place_selection_mode: Literal["rule", "model"] = "rule"
+    model_dir: str = ""  # model.onnx와 codes.json이 있는 폴더(CPU 경로)
+    model_cpu_max_concurrency: int = 2
+    runpod_model_url: str = ""  # 장소 선정 모델 전용 RunPod 엔드포인트 주소(비어 있으면 GPU 경로를 쓰지 않음)
+    runpod_model_api_key: str = ""
+    runpod_model_timeout_seconds: float = 20.0  # 백엔드 → AI 읽기 타임아웃(30초)보다 짧게
+    model_breaker_failures: int = 3  # GPU 호출이 이만큼 연속 실패하면 잠시 막는다
+    model_breaker_cooldown_seconds: float = 60.0
+
     @property
     def allowed_image_hosts_list(self) -> list[str]:
         return [h.strip().lower() for h in self.allowed_image_hosts.split(",") if h.strip()]

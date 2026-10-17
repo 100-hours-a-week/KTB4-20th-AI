@@ -7,7 +7,7 @@ WORKDIR /app
 ENV UV_PYTHON_DOWNLOADS=never
 
 COPY . .
-RUN uv sync --locked --no-dev --python /usr/local/bin/python
+RUN uv sync --locked --no-dev --extra model --python /usr/local/bin/python
 
 ENV PATH="/app/.venv/bin:$PATH"
 
