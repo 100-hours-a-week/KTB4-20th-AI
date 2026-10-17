@@ -11,7 +11,7 @@
 - PR #78 리뷰(`jiyoung720`) 반영: 평가(free)와 서비스 조건이 달랐다. 서비스 후보 제한을 ADR-0006(FOOD가 아닌 슬롯은 취향 상위 두 카테고리)으로 정했고 `selection.py`와 `eval_model --mode top2-slots`에 반영했다. 최종용은 free 조건으로 1회 열었고 top2-slots 조건으로는 아직 재지 않았다(재측정 여부는 미정)
 - 개발용 평가 결과(모델 A 3.37M, 빔 폭 10, free 조건): Recall@10 모델 13.4%, 인기순 5.5%, 규칙 2.4%. 지역별 판정 규칙(비열세 검정)과 예상 판정은 ADR-0005. 최종용은 2026-10-16에 한 번 열었다(재실행 금지): 5개 지역 모두 규칙 대비 비열세 통과, 전체 우세(Recall@10 모델 13.8%, 인기순 5.9%, 규칙 2.5%). ADR-0003·0005 Accepted, ADR-0000 Superseded. ADR-0004는 RunPod 벤치마크로 기본 경로를 정한 뒤 갱신한다
 - 산출물: `$AIHUB_ROOT/derived/semantic_id/v1/m3/`(places.json, visit_map.json, model_a, model_b, bundle_a, eval). `MANIFEST_m3.json`에 기록했고 `--verify` 통과
-- 서빙: RunPod 접근 불가라 `serving/runpod/README.md`의 배포·벤치마크 명령을 사용자가 실행해야 한다
+- 서빙: RunPod 배포와 벤치마크를 마쳤다(2026-10-18). 엔드포인트 `zspx96xu5zs7ge`, 이미지 `whale2200d/place-model-runpod:v1`(digest sha256:21c0e171…92a6), 기본 경로 GPU 우선(ADR-0004 Accepted). 결과는 ADR-0004와 `$AIHUB_ROOT/derived/semantic_id/v1/m3/runpod/results_*.json`. 엔드포인트는 시험 후 Max 워커 0으로 일시 정지한 상태(`/health` workers 모두 0; 다시 쓰려면 Max를 2로 올림). 키 `placemodel-endpoint-1017`(Restricted, 이 엔드포인트 전용)은 `.env`에만 있음. 남은 일: AWS 서버 CPU 경로 측정, 모델 경로 운영 활성화(`PLACE_SELECTION_MODE=model`), 서비스에 쓰지 않으면 엔드포인트 삭제와 키 폐기
 - 진행: M1과 M2 구현 완료. 임베딩 모델은 BAAI/bge-m3, 텍스트는 `이름 | 시도 시군구`(카테고리 라벨 제외)로 확정했다. 근거와 수치는 ADR-0003과 `.grill/attention-based-place-recommendation.md`
 - 다음 작업: 과제 목록의 **M3(T3-1 입력 토큰 설계부터)**. 사용자의 명시적 승인 후에만 착수한다. 학습은 RunPod Pod에서 하므로 시작 전에 Pod 사양과 데이터 전송 방법을 정한다
 - 로컬 브랜치 정리는 사용자가 직접 한다(머지된 브랜치를 건드리지 않는다)

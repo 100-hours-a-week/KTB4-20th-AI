@@ -36,6 +36,13 @@ RUNPOD_MODEL_API_KEY=<RunPod API 키>
 
 `RUNPOD_MODEL_URL`을 비우면 CPU 경로만, `MODEL_DIR`을 비우면 GPU 경로만 쓴다. 모델 경로가 실패하면 기존 규칙 경로로 응답한다.
 
+## 운영 설정과 벤치마크 결과 (2026-10-18, ADR-0004)
+
+- 엔드포인트 `place-model-bench`: Active 워커 0, Max 2, Idle timeout 5초, FlashBoot 꺼짐, 컨테이너 디스크 20GB, 실행 제한 120초.
+- **GPU는 Ada·Ampere 16GB 그룹(RTX 2000 Ada, 4000 Ada, A4000, A4500)으로 고정한다.** 24GB 그룹(PRO 6000 MIG 등 최신 세대 포함)이 배정되면 첫 요청이 약 45초 걸린다.
+- 측정(16GB 그룹): 따뜻한 상태 총 1.3초, 90초 유휴 후 첫 요청 10~13초, 요청 크기 15MB까지 성공. 자세한 값은 ADR-0004.
+- 재현: `scripts/make_runpod_payload.py`로 요청 파일을 만들고 `scripts/bench_runpod.py`로 측정한다(호출은 비용이 나가므로 직접 실행, 키는 `.env`에 둔다).
+
 ## 동작 확인과 벤치마크
 
 ```
