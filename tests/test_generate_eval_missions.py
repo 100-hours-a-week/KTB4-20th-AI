@@ -206,3 +206,12 @@ def test_failed_line_keeps_original_cause():
         "ValueError: Gemini 응답이 요청 내용과 맞지 않음"
     )
     assert describe_cause(HTTPException(status_code=502)) == ""
+
+
+def test_max_calls_does_not_count_skipped_batches_as_done(manifest_and_split, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(pipeline_generate, "MISSION_SYSTEM_PROMPT", pipeline_generate.MISSION_SYSTEM_PROMPT)
+    manifest, split = manifest_and_split
+    argv = ["--manifest", str(manifest), "--split-file", str(split), "--prompt", "v1",
+            "--out", str(tmp_path / "o.jsonl"), "--batch-size", "1", "--max-calls", "1", "--dry-run"]
+    asyncio.run(main(argv))
+    assert "이미 완료 0개) → 이번에 호출할 것 1개" in capsys.readouterr().out

@@ -199,11 +199,12 @@ async def main(argv: list[str] | None = None) -> None:
                   "plan_sha": plan_sha(batches, args.batch_size, args.seed)}
     done = read_done(args.out, expect)
     todo = [(i, b) for i, b in enumerate(batches) if not all(row["photo"] in done for row in b)]
+    remaining = len(todo)  # --max-calls로 이번에 건너뛰는 묶음은 완료가 아니라 남은 묶음이다
     if args.max_calls:
         todo = todo[: args.max_calls]
 
     print(f"모델: {gemini_client.MODEL_NAME}" + (f" · 비교 실행 {expect}" if expect else ""))
-    print(f"사진 {len(rows)}장 → 묶음 {len(batches)}개 (이미 완료 {len(batches) - len(todo)}개) → 이번에 호출할 것 {len(todo)}개")
+    print(f"사진 {len(rows)}장 → 묶음 {len(batches)}개 (이미 완료 {len(batches) - remaining}개) → 이번에 호출할 것 {len(todo)}개")
     print(f"예상 비용: 약 {len(todo) * WON_PER_CALL:,}원 (1회 약 {WON_PER_CALL}원 추정)")
     if args.dry_run:
         for i, batch in todo[:3]:
