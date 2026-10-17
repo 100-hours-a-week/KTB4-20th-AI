@@ -210,6 +210,101 @@ async def test_fetch_image_connection_error_maps_to_502(fake_s3):
     assert exc.value.status_code == 502
 
 
+class CountingStream(httpx.AsyncByteStream):
+    # 본문을 청크로 나눠 주면서 몇 개를 읽었는지, 연결을 닫았는지 센다. 중간에 오류를 낼 수도 있다
+    def __init__(self, chunks, fail_at=None, error=None):
+        self.chunks, self.fail_at, self.error = chunks, fail_at, error
+        self.read, self.closed = 0, False
+
+    async def __aiter__(self):
+        for i, chunk in enumerate(self.chunks):
+            if i == self.fail_at:
+                raise self.error
+            self.read += 1
+            yield chunk
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.fixture
+def small_limit(monkeypatch):
+    # 실제 10MiB 대신 10바이트로 경계를 확인한다
+    monkeypatch.setattr(pipeline_verify, "MAX_IMAGE_BYTES", 10)
+
+
+async def test_fetch_image_asks_for_uncompressed_body(fake_s3):
+    seen = {}
+
+    def handler(request):
+        seen["accept_encoding"] = request.headers.get("Accept-Encoding")
+        return httpx.Response(200, content=b"jpeg")
+
+    fake_s3(handler)
+    await pipeline_verify.fetch_image(IMAGE_URL)
+    assert seen["accept_encoding"] == "identity"
+
+
+async def test_fetch_image_accepts_exactly_the_limit(fake_s3, small_limit):
+    fake_s3(lambda request: httpx.Response(200, content=b"x" * 10))
+    assert await pipeline_verify.fetch_image(IMAGE_URL) == b"x" * 10
+
+
+async def test_fetch_image_declared_too_large_is_rejected_before_reading(fake_s3, small_limit):
+    stream = CountingStream([b"x" * 11])
+    fake_s3(lambda request: httpx.Response(200, headers={"Content-Length": "11"}, stream=stream))
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.fetch_image(IMAGE_URL)
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "이미지 파일 크기가 제한을 초과했습니다"
+    assert stream.read == 0 and stream.closed
+
+
+@pytest.mark.parametrize(
+    "headers", [{}, {"Content-Length": "4"}, {"Content-Length": "abc"}, {"Content-Length": "9" * 5000}],
+    ids=["none", "too-small", "not-a-number", "too-long"],
+)
+async def test_fetch_image_stops_reading_once_over_the_limit(fake_s3, small_limit, headers):
+    # 헤더가 없거나, 작게 적혀 있거나, 숫자가 아니어도 실제로 받은 양으로 막고 남은 청크는 읽지 않는다
+    stream = CountingStream([b"x" * 6, b"x" * 6, b"x" * 6, b"x" * 6])
+    fake_s3(lambda request: httpx.Response(200, headers=headers, stream=stream))
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.fetch_image(IMAGE_URL)
+    assert exc.value.status_code == 422
+    assert stream.read == 2 and stream.closed
+
+
+async def test_fetch_image_error_status_is_502_even_with_a_large_body(fake_s3, small_limit):
+    # 크기 검사보다 상태 코드를 먼저 본다. 큰 404 본문도 읽지 않는다
+    stream = CountingStream([b"x" * 100])
+    fake_s3(lambda request: httpx.Response(404, headers={"Content-Length": "100"}, stream=stream))
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.fetch_image(IMAGE_URL)
+    assert exc.value.status_code == 502
+    assert stream.read == 0
+
+
+async def test_fetch_image_compressed_response_is_502_without_reading(fake_s3):
+    stream = CountingStream([b"gzip-bytes"])
+    fake_s3(lambda request: httpx.Response(200, headers={"Content-Encoding": "gzip"}, stream=stream))
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.fetch_image(IMAGE_URL)
+    assert exc.value.status_code == 502
+    assert stream.read == 0
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [(httpx.ReadTimeout("fake"), 504), (httpx.ReadError("fake"), 502), (httpx.RemoteProtocolError("fake"), 502)],
+)
+async def test_fetch_image_error_while_reading_body(fake_s3, error, code):
+    # 본문을 받는 도중 끊겨도 처음부터 못 받은 경우와 같은 상태 코드다
+    fake_s3(lambda request: httpx.Response(200, stream=CountingStream([b"x", b"x"], fail_at=1, error=error)))
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.fetch_image(IMAGE_URL)
+    assert exc.value.status_code == code
+
+
 # 3. generate_structured — 재시도 횟수. 가짜 클라이언트가 호출 횟수를 센다
 
 class FakeGemini:
@@ -370,6 +465,32 @@ async def test_missing_photo_coordinates_goes_to_vlm(fake_verify_steps):
     res = await pipeline_verify.verify_photo(_verify_request(None))
     assert res.reason is None
     assert fake_verify_steps == {"fetch_image": 1, "score_photo": 1}
+
+
+async def test_unreadable_photo_is_422_without_calling_vlm(fake_verify_steps, monkeypatch):
+    async def fake_fetch(image_url):
+        fake_verify_steps["fetch_image"] += 1
+        return b"not an image"
+
+    monkeypatch.setattr(pipeline_verify, "fetch_image", fake_fetch)
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.verify_photo(_verify_request(None))
+    assert exc.value.status_code == 422
+    assert fake_verify_steps == {"fetch_image": 1, "score_photo": 0}
+
+
+async def test_vlm_gets_the_same_bytes_as_normalize_image(fake_verify_steps, monkeypatch):
+    # 정상 사진은 이번 수정 전과 같은 전처리 결과가 모델로 간다(측정 입력과 같아야 한다)
+    seen = {}
+
+    async def fake_score(image_bytes, place_name, mission_description):
+        seen["bytes"] = image_bytes
+        return VLM_RESULT
+
+    monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
+    raw = await pipeline_verify.fetch_image(IMAGE_URL)
+    await pipeline_verify.verify_photo(_verify_request(None))
+    assert seen["bytes"] == pipeline_verify.normalize_image(raw)
 
 
 # 5. generate_missions — 장소 전부를 한 번에 부르고, 번호로 장소와 짝짓는지
