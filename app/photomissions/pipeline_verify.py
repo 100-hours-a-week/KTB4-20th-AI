@@ -1,4 +1,5 @@
 import io
+import logging
 import math
 from typing import Literal, NamedTuple, cast
 from urllib.parse import urlparse
@@ -27,6 +28,17 @@ CLEAR_MISMATCH_KM = 5.0
 
 _MAX_DIMENSION = 1024  # TODO: baseline 측정(2단계) 후 토큰·정확도 트레이드오프로 조정
 _JPEG_QUALITY = 85
+
+# 백엔드 업로드 상한(5MB, 단위 미확인)을 참고해 여유를 둔 AI 쪽 다운로드 상한. 업로드 검사와 따로 비정상적으로 큰 파일을 막는다
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+# Pillow가 DecompressionBombError를 내는 기준(약 1.79억 픽셀)과 같다. 지금 동작은 그대로 두고 500만 422로 바꾼다.
+# 그 아래(약 9천만~1.79억)는 Pillow가 경고만 내고 원본 크기로 연다. 메모리 상한은 서버 메모리를 확인한 뒤 따로 정한다
+MAX_IMAGE_PIXELS = 2 * Image.MAX_IMAGE_PIXELS
+# 사진이 깨졌거나 형식이 맞지 않을 때 Pillow가 내는 오류. ValueError는 지나치게 큰 PNG 텍스트 청크에서 확인했고,
+# SyntaxError는 일부 형식 처리기가 깨진 파일에 내는 오류다(재현 사례는 없음)
+_IMAGE_ERRORS = (OSError, SyntaxError, ValueError)
+
+logger = logging.getLogger(__name__)
 
 # 2단계 평가셋(경주 4곳 400건, 사람이 매긴 정답 200장)으로 gemini-3.1-pro-preview 기준 확정.
 # 점수 분포는 모델마다 달라서 모델을 바꾸면 다시 측정해야 한다. 자체 모델은 SELF_* 설정값을 쓴다
@@ -65,13 +77,46 @@ def assert_allowed_source(image_url: str) -> None:
         )
 
 
+def _unprocessable(detail: str, **sizes: int) -> HTTPException:
+    # 사진 자체의 문제라 422다. 사진 주소·본문·원본 오류 문장은 남기지 않는다(presigned URL)
+    logger.info("verify 사진 거부: %s %s", detail, sizes)
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail)
+
+
+def _too_large(**sizes: int) -> HTTPException:
+    return _unprocessable("이미지 파일 크기가 제한을 초과했습니다", **sizes)
+
+
+def _declared_length(response: httpx.Response) -> int | None:
+    # 숫자가 아니거나 지나치게 긴 Content-Length는 무시하고, 실제로 받은 양으로 막는다
+    value = response.headers.get("Content-Length", "")
+    if not (value.isascii() and value.isdigit()):
+        return None
+    try:
+        return int(value)
+    except ValueError:  # 파이썬 정수 변환 길이 제한(4300자리)을 넘는 값
+        return None
+
+
 async def fetch_image(image_url: str) -> bytes:
-    # 3. 이미지 획득 - presigned URL로 원본 사진을 가져온다
+    # 3. 이미지 획득 - presigned URL로 원본 사진을 가져온다. MAX_IMAGE_BYTES를 넘으면 끝까지 받지 않고 422
+    # 압축 전송은 받지 않는다. 압축을 푸는 도중의 메모리 증가는 받은 양을 세는 것으로 막기 어렵다(S3 사진에는 압축이 필요 없다)
     # TODO: 타임아웃 값(httpx 기본 5초)은 2단계 baseline 측정 후 확정
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(image_url)
-            response.raise_for_status()
+            async with client.stream("GET", image_url, headers={"Accept-Encoding": "identity"}) as response:
+                response.raise_for_status()  # 큰 404·500 본문도 읽지 않고 502로
+                if response.headers.get("Content-Encoding", "identity").lower() != "identity":
+                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="이미지 다운로드 실패")
+                declared = _declared_length(response)
+                if declared is not None and declared > MAX_IMAGE_BYTES:
+                    raise _too_large(declared_bytes=declared)
+                # 헤더가 없거나 틀려도 실제로 받은 양으로 다시 막는다. 압축은 위에서 거절해서 받은 바이트 그대로다
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > MAX_IMAGE_BYTES:
+                        raise _too_large(received_bytes=len(body))
         except httpx.TimeoutException as e:
             raise HTTPException(
                 status_code=status.HTTP_504_GATEWAY_TIMEOUT,
@@ -82,7 +127,7 @@ async def fetch_image(image_url: str) -> bytes:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="이미지 다운로드 실패",
             ) from e
-    return response.content
+    return bytes(body)
 
 
 def _haversine_km(a: Coordinates, b: Coordinates) -> float:
@@ -111,6 +156,24 @@ def normalize_image(image_bytes: bytes) -> bytes:
     output = io.BytesIO()
     image.save(output, format="JPEG", quality=_JPEG_QUALITY)
     return output.getvalue()
+
+
+def prepare_image(image_bytes: bytes) -> bytes:
+    # 4. 이미지 전처리(서비스) - 열 수 없거나 너무 큰 사진을 500 대신 422로 돌려준다.
+    # normalize_image는 측정·학습 스크립트도 같이 쓰므로 웹 오류를 넣지 않고, 결과도 그대로 둔다
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as probe:  # 헤더만 읽는다. 픽셀은 아직 풀지 않는다
+            width, height = probe.size
+    except Image.DecompressionBombError as e:
+        raise _unprocessable("이미지 해상도가 제한을 초과했습니다", file_bytes=len(image_bytes)) from e
+    except _IMAGE_ERRORS as e:
+        raise _unprocessable("이미지를 열 수 없습니다", file_bytes=len(image_bytes)) from e
+    if width * height > MAX_IMAGE_PIXELS:
+        raise _unprocessable("이미지 해상도가 제한을 초과했습니다", width=width, height=height)
+    try:
+        return normalize_image(image_bytes)
+    except _IMAGE_ERRORS as e:  # 헤더는 멀쩡하고 본문이 깨진 사진(중간에 잘린 JPEG 등)
+        raise _unprocessable("이미지를 열 수 없습니다", file_bytes=len(image_bytes)) from e
 
 
 async def score_photo(
@@ -201,7 +264,7 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
         return build_response(match_score=0, reason="location_mismatch")  # 6번에서 fail이 된다
 
     image_bytes = await fetch_image(request.image_url)  # 3
-    processed = normalize_image(image_bytes)  # 4
+    processed = prepare_image(image_bytes)  # 4
     vlm = await score_photo(processed, request.place_name, request.mission_description)  # 5
 
     # VLM 원값을 그대로 7번에 넘긴다. 등급(6번)과 노출 여부는 build_response가 정한다.

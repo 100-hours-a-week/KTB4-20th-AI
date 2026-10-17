@@ -2,9 +2,10 @@ import io
 
 import pytest
 from fastapi import HTTPException
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 from app.core.config import settings
+from app.photomissions import pipeline_verify
 from app.photomissions.pipeline_verify import (
     CLEAR_MISMATCH_KM,
     LANDMARK_THRESHOLD,
@@ -15,6 +16,7 @@ from app.photomissions.pipeline_verify import (
     build_response,
     is_clear_mismatch,
     normalize_image,
+    prepare_image,
     to_grade,
 )
 from app.photomissions.schemas import Coordinates, DetectedLabel
@@ -124,6 +126,91 @@ def test_normalize_applies_exif_orientation():
     exif[0x0112] = 6  # Orientation: 90도 회전해서 봐야 하는 사진
     out = Image.open(io.BytesIO(normalize_image(_jpeg_bytes(size=(200, 100), exif=exif))))
     assert out.size == (100, 200)
+
+
+# 4-1. prepare_image — 서비스 전처리. 열 수 없거나 너무 큰 사진은 422, 정상 사진은 normalize_image와 같은 결과
+
+def _image_bytes(fmt, mode="RGB", size=(64, 48), **save) -> bytes:
+    buf = io.BytesIO()
+    Image.new(mode, size, "red").save(buf, format=fmt, **save)
+    return buf.getvalue()
+
+
+def _rotated_jpeg() -> bytes:
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    return _jpeg_bytes(size=(200, 100), exif=exif)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [_image_bytes("JPEG"), _image_bytes("PNG", "RGBA"), _image_bytes("WEBP"), _image_bytes("WEBP", "RGBA"), _rotated_jpeg()],
+    ids=["jpeg", "png-rgba", "webp", "webp-rgba", "jpeg-exif-rotated"],
+)
+def test_prepare_keeps_normalize_output_for_supported_formats(raw):
+    # 업로드 허용 형식(JPEG·PNG·WebP)은 이번 수정 전과 같은 결과가 모델로 간다
+    assert prepare_image(raw) == normalize_image(raw)
+
+
+def _big_text_png() -> bytes:
+    info = PngImagePlugin.PngInfo()
+    info.add_text("k", "a" * (2 * 1024 * 1024), zip=True)  # Pillow가 ValueError를 내는 PNG
+    return _image_bytes("PNG", size=(8, 8), pnginfo=info)
+
+
+def _broken_idat_png() -> bytes:
+    png = bytearray(_image_bytes("PNG"))
+    png[png.find(b"IDAT") + 6] ^= 0xFF
+    return bytes(png)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [b"not an image", b"", _image_bytes("JPEG")[:300], _image_bytes("WEBP")[:40], _broken_idat_png(), _big_text_png()],
+    ids=["text", "empty", "cut-jpeg", "cut-webp", "broken-png-data", "png-huge-text"],
+)
+def test_prepare_unreadable_image_is_422(raw):
+    with pytest.raises(HTTPException) as exc:
+        prepare_image(raw)
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "이미지를 열 수 없습니다"
+
+
+def _must_not_decode(image_bytes):
+    raise AssertionError("픽셀 상한을 넘으면 normalize_image(디코딩)를 부르면 안 된다")
+
+
+def test_prepare_over_pixel_limit_is_422_before_decoding(monkeypatch):
+    monkeypatch.setattr(pipeline_verify, "MAX_IMAGE_PIXELS", 99)
+    monkeypatch.setattr(pipeline_verify, "normalize_image", _must_not_decode)
+    with pytest.raises(HTTPException) as exc:
+        prepare_image(_jpeg_bytes(size=(10, 10)))
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "이미지 해상도가 제한을 초과했습니다"
+
+
+def test_prepare_allows_exactly_the_pixel_limit(monkeypatch):
+    monkeypatch.setattr(pipeline_verify, "MAX_IMAGE_PIXELS", 100)
+    raw = _jpeg_bytes(size=(10, 10))
+    assert prepare_image(raw) == normalize_image(raw)
+
+
+def test_prepare_pillow_decompression_bomb_is_422(monkeypatch):
+    # Pillow 자체 한도(기준의 2배)를 넘으면 열 때 오류가 난다. 실제 1.79억 픽셀 대신 한도를 낮춰 확인한다
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+    monkeypatch.setattr(pipeline_verify, "normalize_image", _must_not_decode)
+    with pytest.raises(HTTPException) as exc:
+        prepare_image(_jpeg_bytes(size=(10, 10)))
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "이미지 해상도가 제한을 초과했습니다"
+
+
+def test_prepare_allows_pillow_warning_zone(monkeypatch):
+    # 경고 구간(기준~2배)은 지금처럼 통과시킨다. 메모리 상한은 따로 정한다
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 60)
+    raw = _jpeg_bytes(size=(10, 10))
+    with pytest.warns(Image.DecompressionBombWarning):
+        assert prepare_image(raw) == normalize_image(raw)
 
 
 # 6. to_grade — 임계값은 임시값이라 숫자 대신 상수로 경계를 확인
