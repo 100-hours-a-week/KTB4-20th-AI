@@ -214,6 +214,6 @@ flowchart TD
 
 **근거 문서**
 
-- ADR-0000(규칙, Superseded), ADR-0002(그룹 점수), ADR-0003(모델 구조), ADR-0004(서빙), ADR-0005(학습·평가), ADR-0006(슬롯 후보 제한), ADR-0007(첫 장소 상위 30곳 중 시드 무작위, Proposed).
+- ADR-0000(규칙, Superseded), ADR-0002(그룹 점수), ADR-0003(모델 구조), ADR-0004(서빙), ADR-0005(학습·평가), ADR-0006(슬롯 후보 제한), ADR-0007(첫 장소 상위 30곳 중 시드 무작위).
 - 인계 요약: `.grill/handoff-semantic-id.md`. 관련 PR: #75, #76, #78, #82, #83.
 - 학습·평가 산출물은 여행자 ID와 좌표가 있어 레포 밖 `$AIHUB_ROOT/derived/semantic_id/v1`에 있다.

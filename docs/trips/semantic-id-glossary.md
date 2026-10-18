@@ -85,5 +85,5 @@
 
 - **`$AIHUB_ROOT/derived/semantic_id/v1/`**: 학습·평가 산출물 위치(레포 밖, 여행자 ID·좌표 포함). 구조는 `m1/`(분할·하루 시퀀스), `m2/`(임베딩·RQ-VAE·코드 사전), `m3/`(모델·서빙 묶음·평가 결과), `experiments/`.
 - **`MANIFEST*.json`**: 산출물 파일별 sha256. `manifest --verify`로 변경 여부를 확인한다. 기존 MANIFEST는 덮어쓰지 않고 새 파일만 새 MANIFEST에 추가한다.
-- **ADR**: 아키텍처 결정 기록. ADR-0000(규칙, 대체됨), 0003(Semantic ID 모델), 0004(서빙), 0005(학습·평가), 0006(슬롯 후보 제한), 0007(첫 장소 무작위, Proposed). 0007 외에는 Accepted.
+- **ADR**: 아키텍처 결정 기록. ADR-0000(규칙, 대체됨), 0003(Semantic ID 모델), 0004(서빙), 0005(학습·평가), 0006(슬롯 후보 제한), 0007(첫 장소 무작위). 모두 Accepted.
 - **핸드오프 (`.grill/handoff-semantic-id.md`)**: 세션 시작 때 먼저 읽는 현재 상태 요약.
