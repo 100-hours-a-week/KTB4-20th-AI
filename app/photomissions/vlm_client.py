@@ -40,7 +40,7 @@ DEADLINE_GUARD = 0.1
 # 폴백 예산(VERIFY_MODEL_BUDGET_SECONDS) 안에서 Gemini 몫으로 남겨 둘 시간. 자체 모델은 이만큼 덜 기다린다
 # 임시값: Gemini Pro 판정 평균 10.9초(dev)는 평균이라 상한이 아니다. 운영 로그의 gemini_sec 분포를 보고 조정한다
 MIN_GEMINI_START_BUDGET_SECONDS = 10.0
-BUDGET_MARGIN_SECONDS = 0.5  # 시간 계산 사이의 여유
+BUDGET_MARGIN_SECONDS = 0.5  # 시간 계산 사이의 여유. 자체 모델 안전망(DEADLINE_GUARD)보다 커야 Gemini 몫이 줄지 않는다
 _HOURS = re.compile(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})")
 
 _client: httpx.AsyncClient | None = None
@@ -351,7 +351,8 @@ async def score(
                 except _Retryable as e:
                     if trace["attempts"] >= MAX_ATTEMPTS or not _can_retry(deadline - loop.time()):
                         raise e.error from e.__cause__  # 재시도를 못 하면 원래 원인(502) 그대로
-    except TimeoutError as e:  # 바깥 안전망이 요청을 끊음
+    except TimeoutError as e:  # 바깥 안전망이 요청을 끊음(또는 부르는 쪽 마감이 이미 지남)
+        trace["last_error"] = "DeadlineExceeded"  # httpx 읽기 시간 초과(ReadTimeout)와 구분한다
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과",
         ) from e

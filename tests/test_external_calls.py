@@ -953,6 +953,8 @@ async def test_log_for_location_mismatch_has_no_model(full_fallback, caplog, mon
     [line] = _verify_logs(caplog)
     assert (line["route"], line["answered_by"], line["reason"], line["result"]) == ("not_started", None, "location_mismatch", "fail")
     assert line["model_stage_sec"] is None and line["fallback_attempted"] is False
+    # 폴백 설정 여부는 모델 단계 전에 끝나도 실제 설정대로 남는다
+    assert (line["fallback_enabled"], line["budget_sec"], line["failure_stage"]) == (True, 20.0, None)
     assert "verify_answered_by" not in tags
 
 
@@ -965,6 +967,25 @@ async def test_log_for_unreadable_photo(full_fallback, caplog, monkeypatch):
         await pipeline_verify.verify_photo(_verify_request(None))
     [line] = _verify_logs(caplog)
     assert (line["route"], line["final_status"], line["outcome"]) == ("not_started", 422, "error")
+    assert (line["failure_stage"], line["error_kind"]) == ("image", "이미지를 열 수 없습니다")
+
+
+async def test_log_for_rejected_host(full_fallback, caplog):
+    request = _verify_request(None).model_copy(update={"image_url": "https://evil.example.com/a.jpg"})
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(HTTPException):
+        await pipeline_verify.verify_photo(request)
+    [line] = _verify_logs(caplog)
+    assert (line["failure_stage"], line["error_kind"], line["final_status"]) == ("source", "허용되지 않은 이미지 호스트입니다", 422)
+    assert "evil.example.com" not in caplog.text
+
+
+async def test_log_for_model_stage_failure(full_fallback, caplog):
+    full_fallback.set_self(HTTPException(status_code=502, detail="사진 판정 실패"))
+    full_fallback.set_gemini(_api_error(500))
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(HTTPException):
+        await pipeline_verify.verify_photo(_verify_request(None))
+    [line] = _verify_logs(caplog)
+    assert (line["failure_stage"], line["error_kind"]) == ("model", "사진 판정 실패")
 
 
 async def test_log_for_cancelled_request(full_fallback, caplog):
@@ -995,3 +1016,110 @@ async def test_log_has_no_secrets_and_each_request_starts_fresh(full_fallback, c
     assert (second["fallback_attempted"], second["self_error_status"], second["answered_by"]) == (False, None, "self")
     text = caplog.text
     assert IMAGE_URL not in text and "my-bucket" not in text
+
+
+
+# 8. 폴백 + 실제 자체 모델 클라이언트(가짜 서버) — 요청별 마감·재시도·동시 요청이 함께 맞는지
+
+@pytest.fixture
+async def real_client(fallback, monkeypatch):
+    # 폴백 설정 위에 실제 vlm_client를 MockTransport로 띄운다. 외부 호출은 없다
+    for key, value in {"vlm_base_url": "https://vlm.example.com/v1", "vlm_model": "qwen", "vlm_api_key": "k"}.items():
+        monkeypatch.setattr(settings, key, value)
+    servers = {}
+
+    def install(handler):
+        vlm_client.start(settings, transport=httpx.MockTransport(handler))
+        servers["requests"] = []
+        return servers
+
+    yield install
+    await vlm_client.close()
+
+
+def _chat_json(value):
+    return httpx.Response(200, json={"choices": [{"message": {"content": value.model_dump_json()}}]})
+
+
+async def test_real_client_retries_then_falls_back_once(fallback, real_client):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(500)
+
+    real_client(handler)
+    trace = pipeline_verify.VerifyTrace()
+    result = await pipeline_verify.score_photo(b"jpeg", "첨성대", "미션", trace)
+    assert result.answered_by == "gemini"
+    assert len(seen) == 2  # 자체 모델 안에서 재시도 1번
+    assert fallback.calls["gemini"] == 1  # Gemini는 한 번만
+    assert (trace.self_error_status, trace.self_call["attempts"], trace.self_call["upstream_status"]) == (502, 2, 500)
+
+
+async def test_real_client_stops_at_the_self_deadline_then_falls_back(fallback, real_client, monkeypatch):
+    import asyncio
+
+    # 여유는 자체 모델 안전망(DEADLINE_GUARD 0.1초)보다 커야 Gemini 몫이 남는다(운영값 0.5초)
+    monkeypatch.setattr(settings, "verify_model_budget_seconds", 0.8)
+    monkeypatch.setattr(vlm_client, "MIN_GEMINI_START_BUDGET_SECONDS", 0.1)
+    monkeypatch.setattr(vlm_client, "BUDGET_MARGIN_SECONDS", 0.25)
+
+    async def slow(request):
+        await asyncio.sleep(5)
+        return _chat_json(VLM_RESULT)
+
+    real_client(slow)
+    started = asyncio.get_running_loop().time()
+    trace = pipeline_verify.VerifyTrace()
+    result = await pipeline_verify.score_photo(b"jpeg", "첨성대", "미션", trace)
+    assert result.answered_by == "gemini"
+    assert asyncio.get_running_loop().time() - started < 1.5
+    assert trace.self_error_status == 504 and trace.self_call["last_error"] in ("ReadTimeout", "DeadlineExceeded")
+
+
+async def test_concurrent_requests_keep_their_own_path_and_thresholds(fallback, fake_verify_steps, caplog, monkeypatch):
+    # 한 요청은 자체 모델이 답하고(85점, self 기준 70 → 성공), 다른 요청은 폴백한다(Gemini 85점, 기준 90 → 재시도)
+    import asyncio
+
+    monkeypatch.setattr(pipeline_verify, "score_photo", REAL_SCORE_PHOTO)
+
+    async def fake_score(image_bytes, place_name, mission_description, *, deadline=None, trace=None):
+        await asyncio.sleep(0.05)  # 두 요청이 겹치게
+        if mission_description == "폴백":
+            raise HTTPException(status_code=504)
+        return VLM_RESULT
+
+    monkeypatch.setattr(vlm_client, "score", fake_score)
+    fallback.set_gemini(VLM_RESULT)
+    ok_request = _verify_request(None)
+    fb_request = ok_request.model_copy(update={"mission_description": "폴백"})
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        ok_res, fb_res = await asyncio.gather(
+            pipeline_verify.verify_photo(ok_request), pipeline_verify.verify_photo(fb_request),
+        )
+    assert (ok_res.result, fb_res.result) == ("success", "retry")
+    lines = _verify_logs(caplog)
+    assert sorted((x["answered_by"], x["fallback_attempted"]) for x in lines) == [("gemini", True), ("self", False)]
+
+
+async def test_cancel_while_waiting_for_fallback_gemini(fallback):
+    import asyncio
+
+    async def hang():
+        await asyncio.sleep(5)
+
+    fallback.set_self(HTTPException(status_code=502))
+    fallback.set_gemini(hang)
+    task = asyncio.create_task(_score_traced())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert fallback.calls["gemini"] == 1  # 취소 뒤 다시 부르지 않는다
+
+
+
+def test_budget_margin_covers_the_self_deadline_guard():
+    # 자체 모델은 자기 마감보다 안전망(DEADLINE_GUARD)만큼 늦게 끝날 수 있다. 여유가 그보다 작으면 폴백할 시간이 줄어든다
+    assert vlm_client.BUDGET_MARGIN_SECONDS > vlm_client.DEADLINE_GUARD

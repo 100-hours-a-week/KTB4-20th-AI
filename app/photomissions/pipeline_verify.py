@@ -100,6 +100,7 @@ type Route = Literal["self", "off_hours", "gemini_backend", "not_started"]
 class VerifyTrace:
     # 요청 한 건의 모델 판정 경로 기록. 요청마다 새로 만든다. 사진·키·주소·에러 원문은 넣지 않는다
     route: Route = "not_started"  # self: 자체 모델 먼저 / off_hours: 운영 시간 밖이라 바로 Gemini / gemini_backend: 설정이 gemini
+    stage: str = "source"  # 지금 하고 있는 단계(source·download·image·model·response). 실패하면 여기서 멈춘 단계다
     answered_by: AnsweredBy | None = None  # 모델이 정상적으로 답했을 때만(성공 판정이라는 뜻이 아니다)
     fallback_enabled: bool = False
     fallback_attempted: bool = False
@@ -419,26 +420,35 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
     # 오케스트레이터 - 판단하지 않고 1~7단계를 순서대로 호출만 한다
     # 모델을 부르기 전에 끝나는 요청(위치 반려·사진 다운로드 실패)도 Sentry에서 백엔드별로 볼 수 있게 맨 앞에서 붙인다
     sentry_sdk.set_tag("verify_backend", settings.verify_backend)
-    trace = VerifyTrace()
+    # 폴백 설정 여부는 모델 단계에 가기 전에 끝난 요청(위치 반려·사진 오류)에도 같은 값으로 남긴다
+    trace = VerifyTrace(fallback_enabled=vlm_client.fallback_enabled(settings))
+    if trace.fallback_enabled:
+        trace.budget_sec = settings.verify_model_budget_seconds
     response: VerifyResponse | None = None
-    final_status, outcome = 500, "error"
+    final_status, outcome, error_kind = 500, "error", None
     try:
         response = await _verify(request, trace)
         final_status, outcome = 200, "ok"
         return response
     except HTTPException as e:
-        final_status = e.status_code
+        # detail은 코드에 고정된 문구라 주소·사진 정보가 없다(예: "이미지 파일 크기가 제한을 초과했습니다")
+        final_status, error_kind = e.status_code, e.detail if isinstance(e.detail, str) else type(e).__name__
         raise
     except asyncio.CancelledError:
         outcome = "cancelled"  # 응답을 보내지 않았으니 상태 코드를 지어내지 않는다
         raise
+    except Exception as e:
+        error_kind = type(e).__name__  # 예외 문장에는 주소가 들어 있을 수 있어 종류만 남긴다
+        raise
     finally:
         if trace.answered_by is not None:
             sentry_sdk.set_tag("verify_answered_by", trace.answered_by)
-        verify_log.info("verify %s", json.dumps(_log_fields(trace, response, final_status, outcome), ensure_ascii=False))
+        fields = _log_fields(trace, response, final_status, outcome, error_kind)
+        verify_log.info("verify %s", json.dumps(fields, ensure_ascii=False))
 
 
 async def _verify(request: VerifyRequest, trace: VerifyTrace) -> VerifyResponse:
+    trace.stage = "source"
     assert_allowed_source(request.image_url)  # 1
     # 좌표가 없으면 위치로는 판정할 수 없으므로 사진 판정(VLM)으로 넘긴다
     if request.photo_coordinates is not None and is_clear_mismatch(  # 2
@@ -446,9 +456,13 @@ async def _verify(request: VerifyRequest, trace: VerifyTrace) -> VerifyResponse:
     ):
         return location_mismatch_response()
 
+    trace.stage = "download"
     image_bytes = await fetch_image(request.image_url)  # 3
+    trace.stage = "image"
     processed = prepare_image(image_bytes)  # 4
+    trace.stage = "model"
     scored = await score_photo(processed, request.place_name, request.mission_description, trace)  # 5
+    trace.stage = "response"
     vlm = scored.vlm
     if isinstance(vlm, QuestionAnswer):  # 설정이 아니라 실제로 받은 답의 형식으로 고른다
         return question_response(vlm)  # 6·7
@@ -463,7 +477,9 @@ async def _verify(request: VerifyRequest, trace: VerifyTrace) -> VerifyResponse:
     )
 
 
-def _log_fields(trace: VerifyTrace, response: VerifyResponse | None, final_status: int, outcome: str) -> dict:
+def _log_fields(
+    trace: VerifyTrace, response: VerifyResponse | None, final_status: int, outcome: str, error_kind: str | None,
+) -> dict:
     # 폴백률·원인을 나중에 셀 수 있게 요청마다 같은 칸으로 남긴다. 사진·주소·키·에러 원문은 넣지 않는다
     # route: not_started(위치 반려·사진 처리에서 끝남) / self / off_hours(운영 시간 밖, 폴백 아님) / gemini_backend
     return {
@@ -487,4 +503,6 @@ def _log_fields(trace: VerifyTrace, response: VerifyResponse | None, final_statu
         "model_stage_sec": trace.model_stage_sec,
         "final_status": final_status if outcome != "cancelled" else None,
         "outcome": outcome,
+        "failure_stage": None if outcome == "ok" else trace.stage,  # 실패·취소한 단계
+        "error_kind": error_kind,
     }

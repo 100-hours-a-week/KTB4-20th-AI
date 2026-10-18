@@ -563,6 +563,20 @@ async def test_passed_caller_deadline_sends_nothing(fake_vlm):
     assert trace["attempts"] == 0
 
 
+async def test_outer_deadline_is_recorded_apart_from_read_timeout(fake_vlm, monkeypatch):
+    # 안전망이 끊은 경우는 원인이 비지 않고 DeadlineExceeded로 남는다(httpx ReadTimeout과 구분)
+    async def stuck(request):
+        await anyio.sleep(5)  # 읽기 시간 초과보다 먼저 안전망이 끊게 httpx 시간 초과를 우회한다
+
+    monkeypatch.setattr(vlm_client, "_attempt", lambda *a, **k: stuck(None))
+    fake_vlm(ok)
+    trace: dict = {}
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=_now() + 0.2, trace=trace)
+    assert exc.value.status_code == 504
+    assert trace["last_error"] == "DeadlineExceeded"
+
+
 async def test_trace_is_filled_per_call_and_does_not_leak(fake_vlm):
     fake_vlm(status_(500), raise_(httpx.ConnectError), ok)
     first: dict = {}
