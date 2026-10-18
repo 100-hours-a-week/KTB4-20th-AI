@@ -4,18 +4,35 @@
 
 ## 1. 변동 상태 (이 절만 자주 바뀐다)
 
-- 마지막 갱신: 2026-10-16, 기준 커밋(`dev`): `65226c4` (이 값을 믿지 말고 아래 점검 명령으로 확인한다)
-- 머지 완료: PR #69(ADR 3건과 로그), #70(품질 하한, 중복 장소 방지, README 표, CI 덤프), #71(하루 단위 시퀀스 측정 스크립트), #73, #74(이 문서와 ADR 승인 조건), #72와 #68(photomission, 다른 팀원의 PR)
-- 머지 완료: #75, #76, #77(2026-10-16). 열린 PR 없음. M3 브랜치는 dev(#77 포함)를 병합한 상태
-- 진행 중 브랜치: `feat/semantic-id-m3-model`(M3 학습·평가, 서빙 코드). 푸시·PR 전. 마감은 2026-10-19(월) 빠르면, 20일(화) 늦어도이며 서빙 3단계(두 경로, 폴백, 콜드 스타트 측정)까지 완료해야 한다
-- PR #78 리뷰(`jiyoung720`) 반영: 평가(free)와 서비스 조건이 달랐다. 서비스 후보 제한을 ADR-0006(FOOD가 아닌 슬롯은 취향 상위 두 카테고리)으로 정했고 `selection.py`와 `eval_model --mode top2-slots`에 반영했다. 최종용은 free 조건으로 1회 열었고 top2-slots 조건으로는 아직 재지 않았다(재측정 여부는 미정)
-- 개발용 평가 결과(모델 A 3.37M, 빔 폭 10, free 조건): Recall@10 모델 13.4%, 인기순 5.5%, 규칙 2.4%. 지역별 판정 규칙(비열세 검정)과 예상 판정은 ADR-0005. 최종용은 2026-10-16에 한 번 열었다(재실행 금지): 5개 지역 모두 규칙 대비 비열세 통과, 전체 우세(Recall@10 모델 13.8%, 인기순 5.9%, 규칙 2.5%). ADR-0003·0005 Accepted, ADR-0000 Superseded. ADR-0004는 RunPod 벤치마크로 기본 경로를 정한 뒤 갱신한다
-- 산출물: `$AIHUB_ROOT/derived/semantic_id/v1/m3/`(places.json, visit_map.json, model_a, model_b, bundle_a, eval). `MANIFEST_m3.json`에 기록했고 `--verify` 통과
-- 서빙: RunPod 배포와 벤치마크를 마쳤다(2026-10-18). 엔드포인트 `zspx96xu5zs7ge`, 이미지 `whale2200d/place-model-runpod:v2`(digest sha256:b683…a9c4; v1은 sha256:21c0e171…92a6, `first_k`·`seed` 무시), 기본 경로 GPU 우선(ADR-0004 Accepted). 결과는 ADR-0004와 `$AIHUB_ROOT/derived/semantic_id/v1/m3/runpod/results_*.json`. G단계(서버 경유 확인)까지 마쳤다(2026-10-18): uvicorn + 실제 엔드포인트 요청 3건 200, `/health` 완료 수 +3, 잘못된 주소 시험에서 규칙 경로로 폴백. AWS 서버에는 CPU 경로를 배포하지 않는 것으로 가정(폴백 순서 GPU → 규칙). 정상 요청의 경로 로그는 INFO라 서버 로그에 안 보이며 후순위로 미룸(Sentry 태그 안은 폐기). 엔드포인트는 시험 후 Max 워커 0으로 일시 정지한 상태(`/health` workers 모두 0; 다시 쓰려면 Max를 1~2로 올림). 운영 활성화에는 `PLACE_SELECTION_MODE=model`, `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`만 필요(`MODEL_DIR`은 비움). 키 `placemodel-endpoint-1017`(Restricted, 이 엔드포인트 전용)은 `.env`에만 있음. 남은 일: 모델 경로 운영 활성화 결정과 환경변수 배포, 서비스에 쓰지 않으면 엔드포인트 삭제와 키 폐기
-- 첫 장소 무작위(2026-10-18): ADR-0007(Accepted), PR #86(`feat/first-place-random`, 리뷰어 `jiyoung720` 머지 대기). 첫 장소를 모델 상위 30곳 중 요청 해시 시드로 선택, 품질 하한은 유지. 전체 7,680건 불변식 위반 0. 이미지 v2(digest `sha256:b683…a9c4`)를 푸시하고 엔드포인트를 v2로 바꿔 GPU에서 확인했다(같은 시드 동일, 다른 시드 다름, CUDA). 확인 후 Max 워커는 0으로 되돌림. 하한 완화는 교통 거점 제외 시험 뒤 별도 결정
-- 진행: M1과 M2 구현 완료. 임베딩 모델은 BAAI/bge-m3, 텍스트는 `이름 | 시도 시군구`(카테고리 라벨 제외)로 확정했다. 근거와 수치는 ADR-0003과 `.grill/attention-based-place-recommendation.md`
-- 다음 작업: 과제 목록의 **M3(T3-1 입력 토큰 설계부터)**. 사용자의 명시적 승인 후에만 착수한다. 학습은 RunPod Pod에서 하므로 시작 전에 Pod 사양과 데이터 전송 방법을 정한다
-- 로컬 브랜치 정리는 사용자가 직접 한다(머지된 브랜치를 건드리지 않는다)
+- 마지막 갱신: 2026-10-18 저녁(세션 종료 시점). 기준 커밋(`dev`)은 적지 않는다. 아래 점검 명령으로 확인한다
+- 마감: 최종 발표·제출·시연은 2026-10-19(월) 빠르면, 20일(화) 늦어도
+- 구현 상태: M1~M5 완료. 모델 경로(Semantic ID 생성 + 후보 제한 빔 서치)와 서빙(RunPod GPU 우선, 실패 시 규칙)이 dev에 들어가 있다. 운영 기본값은 아직 규칙(`PLACE_SELECTION_MODE=rule`)이라 사용자가 받는 일정은 규칙 결과다
+- ADR 상태: 0000 Superseded, 0002~0006 Accepted. 0007(첫 장소 무작위)은 이 브랜치에서 Accepted로 적었지만 PR #86이 머지돼야 확정이다
+- **진행 중 PR #86** (`feat/first-place-random`, 푸시 완료, 작성자 `whale2200d`, 리뷰어 `jiyoung720`, 머지는 리뷰어): 모델 경로의 첫 장소를 모델 상위 30곳 중 요청 해시 시드로 무작위 선택. 전체 7,680건 불변식 위반 0, 이미지 v2 GPU 확인(같은 시드 동일, 다른 시드 다름, CUDA). 내용은 ADR-0007과 PR 설명
+- **리뷰 코멘트 대기(답변 안 함)**: `app/trips/router.py:64`에서 리뷰어가 "같은 그룹이 같은 조건으로 재생성하면 똑같은 일정이 나오나요?"라고 물었다. 사실: 요청 본문이 같으면 시드가 같아 똑같은 일정이 나온다. 이 점을 답변하고, 재생성용 선택 필드(`regenerate_seed`, 값이 없으면 현재 동작)를 이 PR에 넣을지 후속 PR로 할지 사용자가 결정한다(추천: 답변만 하고 후속 PR). 필드를 BE가 보내는 방식은 확인하지 못했고 BE와 스키마 협의가 필요하다. 사용자가 "내일 진행"이라고 했다
+- 서빙: 엔드포인트 `zspx96xu5zs7ge`, 이미지 `whale2200d/place-model-runpod:v2`(digest `sha256:b683…a9c4`; v1은 `sha256:21c0e171…92a6`이고 `first_k`·`seed`를 무시함). Active 0, Idle 5초, FlashBoot 끔, GPU는 Ada/Ampere 16GB 그룹. 확인 후 Max Workers를 0으로 되돌려 일시 정지 상태다(사용자가 콘솔에서 변경, 내가 직접 확인하지는 못함). 다시 쓰려면 Max를 1~2로 올린다. 운영 활성화에는 `PLACE_SELECTION_MODE=model`, `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`만 필요하다(`MODEL_DIR`은 비움). 키 `placemodel-endpoint-1017`(Restricted)은 `.env`에만 있다. AWS 서버에는 CPU 경로를 배포하지 않는 것으로 가정(폴백 순서 GPU → 규칙)
+- 평가 결과: 최종용은 2026-10-16에 free 조건으로 한 번 열었다(재실행 금지). 모델 13.8%, 인기순 5.9%, 규칙 2.5%, 5개 지역 비열세 통과. 서비스 조건(top2-slots, 개발용) 모델 5.9%, 규칙 2.4%, 인기순 5.5%로 인기순 대비 차이는 없다(+0.4%p, 구간 −0.3~+1.2). 자세한 수치는 ADR-0003·0005·0006
+- 취향 반영 한계: 학습 데이터에서 방문이 미션 기반 취향을 거의 따르지 않고(lift 1.06), 모델의 헤더 반응이 일관되지 않다. 취향 반영은 대부분 후보 제한(ADR-0006)이 한다
+- 산출물: `$AIHUB_ROOT/derived/semantic_id/v1/m3/`(places.json, visit_map.json, model_a, model_b, bundle_a, eval, runpod). `MANIFEST_m3.json`·`MANIFEST_m3b.json`에 기록. 이후 만든 `eval/dev_pref_sensitivity_model_a.json`, `eval/dev_first_place_variants_*.json`은 어떤 MANIFEST에도 없다(필요하면 `manifest --only-new`로 추가)
+- 작업 트리: `TODO.md`는 사용자의 개인 파일이므로 건드리거나 커밋하지 않는다. 로컬 브랜치 정리는 사용자가 한다
+
+### 미결·후속 작업 (우선순위 순)
+
+1. PR #86 리뷰 질문 답변과 재생성 필드 결정(위 참조), 리뷰어 머지 대기
+2. 품질 하한을 "영업 종료만 제외"로 풀지 여부: 하한만 풀면 결과가 나빠졌다(제주항 등 교통 거점이 추천됨). 교통 거점·항구·공항 제외 시험을 먼저 하고 결정한다. 풀면 규칙 경로에도 영향이 있어 코드 사전(약 9,957곳) 재패키징, 새 이미지, 7,680건 재검증, README 표 갱신이 필요하다
+3. 모델 경로 운영 활성화 결정과 환경변수 배포. 쓰지 않으면 엔드포인트 삭제, 키 폐기, Docker Hub 토큰·이미지 정리
+4. 선택: 큰 모델 B를 Recall@10으로 평가(기준을 먼저 정한다: 서비스 조건 개발용 Recall@10 차이의 신뢰구간 하한 > 0), 새 평가 파일의 MANIFEST 추가
+5. 최종 발표 자료: A4 보고서(Claude Docs 아티팩트로 만든 적 있음)와 `docs/trips/place-selection-evolution.md`, `docs/trips/semantic-id-glossary.md`를 활용
+
+### 다음 세션 재개 방법
+
+1. 같은 폴더(`KTB4-20th-AI`)에서 `claude`를 실행한다. 이전 대화를 이어 가려면 `claude --continue`(마지막 세션) 또는 `claude --resume`(목록에서 선택)을 쓴다. 대화가 길어 요약본으로 이어지므로, 새 세션이 낫다면 그냥 `claude`로 시작하고 아래 4번을 말한다
+2. 세션이 시작되면 `CLAUDE.md`의 순서를 따른다: 이 문서 → ADR-0003~0005 → `.grill/attention-based-place-recommendation-tasks.md`의 해당 절. 낯선 용어는 `docs/trips/semantic-id-glossary.md`, 설계 변천은 `docs/trips/place-selection-evolution.md`를 읽는다
+3. 상태 점검: `git branch --show-current`, `git status --short`, `git log --oneline -3`, `gh pr list --state open`. `gh pr view 86 --json state,reviews`로 #86 머지 여부와 새 코멘트를 본다. #86이 머지됐다면 로컬 브랜치를 `dev`로 옮기고 `git pull`한 뒤 ADR-0007이 Accepted로 보이는지 확인한다
+4. 시작 때 사용자에게 줄 말 예: "handoff를 읽고 PR #86의 리뷰 질문(같은 요청이면 같은 일정) 답변부터 이어 가자"
+5. 규칙: 승인 전에는 파일 생성·브랜치 생성·푸시를 하지 않는다. 푸시와 PR 생성은 사용자가 요청할 때만 한다. 자기 PR은 머지하지 않는다. RunPod 호출은 유료이니 매번 승인을 받는다. 키는 `.env`에만 둔다
+6. 환경 주의: `.env`의 `PLACE_SELECTION_MODE`는 테스트 전에 `rule`이어야 한다(`PLACE_SELECTION_MODE=rule uv run pytest -q`). 도커 이미지 푸시, 푸시·PR 같은 공개 작업은 자동 모드 분류기가 막을 수 있으니 그때는 사용자에게 `! <명령>`으로 실행해 달라고 한다. 모델 파일을 쓰는 로컬 명령은 `uv run --with onnxruntime --with numpy python -m ...`로 돌린다
+
 
 ### 시작할 때 상태 점검 명령
 
@@ -30,7 +47,7 @@ gh pr list --state open                           # 열린 PR
 ## 2. 읽는 순서와 문서 우선순위
 
 1. 이 문서
-2. `docs/adr/adr-0003.md`(모델 방식), `adr-0004.md`(서빙), `adr-0005.md`(학습 데이터와 평가). 모두 Proposed다. ADR-0000은 Accepted로 유지된다. 전환 조건: ADR-0005는 M1과 개발용 평가 구현 PR이 머지되고 분할·누수 방지 테스트가 통과할 때, ADR-0003은 최종용 평가를 통과할 때(통과 시 ADR-0000을 Superseded로), ADR-0004는 벤치마크로 기본 경로를 정할 때. 상태 변경은 PR로 하고 리뷰어 머지가 승인 시점이다
+2. `docs/adr/adr-0003.md`(모델 방식), `adr-0004.md`(서빙), `adr-0005.md`(학습 데이터와 평가). 모두 Accepted다(ADR-0000은 Superseded, ADR-0006·0007도 같이 본다). 아래는 전환 당시의 조건 기록이다. 전환 조건: ADR-0005는 M1과 개발용 평가 구현 PR이 머지되고 분할·누수 방지 테스트가 통과할 때, ADR-0003은 최종용 평가를 통과할 때(통과 시 ADR-0000을 Superseded로), ADR-0004는 벤치마크로 기본 경로를 정할 때. 상태 변경은 PR로 하고 리뷰어 머지가 승인 시점이다
 3. `.grill/attention-based-place-recommendation-tasks.md`의 해당 마일스톤
 4. `.grill/attention-based-place-recommendation.md`(결정, 가정, 열린 질문)
 
