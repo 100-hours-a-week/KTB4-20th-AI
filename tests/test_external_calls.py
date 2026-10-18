@@ -31,6 +31,7 @@ from app.photomissions.schemas import (
 pytestmark = pytest.mark.anyio
 
 VLM_RESULT = VlmResult(detected_labels=[], landmark_confidence=90, match_score=85, retry_hint="")
+REAL_SCORE_PHOTO = pipeline_verify.score_photo
 PLACE = MissionPlace(
     id="places/ChIJ123",
     displayName=DisplayName(text="첨성대", languageCode="ko"),
@@ -128,8 +129,9 @@ async def test_self_backend_success_does_not_call_gemini(monkeypatch):
     monkeypatch.setattr(settings, "verify_backend", "self")
     monkeypatch.setattr(pipeline_verify, "generate_structured", _raising(AssertionError("Gemini를 부르면 안 됨")))
 
-    async def fake_score(image_bytes, place_name, mission_description):
+    async def fake_score(image_bytes, place_name, mission_description, *, deadline=None, trace=None):
         assert (image_bytes, place_name, mission_description) == (b"jpeg", "첨성대", "첨성대 정면이 보이게 찍기")
+        assert deadline is None  # 폴백을 켜지 않으면 마감은 자체 모델 설정 그대로다
         return VLM_RESULT
 
     monkeypatch.setattr(vlm_client, "score", fake_score)
@@ -635,3 +637,251 @@ async def test_generate_missions_retries_when_place_missing(fake_gemini):
 
     assert fake.calls == 2
     assert [m.place_id for m in res.missions] == ["places/A", "places/B"]
+
+
+
+# 6. 폴백 — self에서 자체 모델이 실패하거나 운영 시간 밖이면 Gemini로, 모델 단계 전체 예산 안에서
+
+GEMINI_RESULT = VlmResult(detected_labels=[], landmark_confidence=70, match_score=95, retry_hint="")
+
+
+@pytest.fixture
+def fallback(monkeypatch):
+    # self + 폴백 설정. 운영 시간 판단 시계는 운영 시간 안(10:00)으로 고정한다
+    from datetime import datetime
+
+    from app.core.time import SERVICE_TIMEZONE
+
+    for key, value in {
+        "verify_backend": "self", "vlm_format": "score", "verify_model_budget_seconds": 20.0,
+        "vlm_serving_hours": "09:00-17:00", "vlm_deadline_seconds": 60.0,
+        "self_success_threshold": 70.0, "self_retry_threshold": 30.0, "self_landmark_threshold": 50.0,
+    }.items():
+        monkeypatch.setattr(settings, key, value)
+    clock = {"now": datetime(2026, 10, 20, 10, 0, tzinfo=SERVICE_TIMEZONE)}
+    monkeypatch.setattr(pipeline_verify, "_now_in_service_timezone", lambda: clock["now"])
+    calls = {"self": [], "gemini": 0}
+
+    def set_self(outcome):
+        async def fake_score(image_bytes, place_name, mission_description, *, deadline=None, trace=None):
+            calls["self"].append(deadline)
+            if trace is not None:
+                trace.update(attempts=1, upstream_status=None, last_error="ReadTimeout")
+            if isinstance(outcome, BaseException):
+                raise outcome
+            if callable(outcome):
+                return await outcome()
+            return outcome
+        monkeypatch.setattr(vlm_client, "score", fake_score)
+
+    def set_gemini(outcome):
+        async def fake_generate(**kwargs):
+            calls["gemini"] += 1
+            if isinstance(outcome, BaseException):
+                raise outcome
+            if callable(outcome):
+                return await outcome()
+            return outcome
+        monkeypatch.setattr(pipeline_verify, "generate_structured", fake_generate)
+
+    set_gemini(GEMINI_RESULT)
+    return SimpleNamespace(calls=calls, clock=clock, set_self=set_self, set_gemini=set_gemini)
+
+
+async def _score_traced():
+    trace = pipeline_verify.VerifyTrace()
+    result = await pipeline_verify.score_photo(b"jpeg", "첨성대", "첨성대 정면이 보이게 찍기", trace)
+    return result, trace
+
+
+async def test_self_success_does_not_fall_back(fallback):
+    fallback.set_self(VLM_RESULT)
+    result, trace = await _score_traced()
+    assert result == ScoreResult(VLM_RESULT, "self")
+    assert fallback.calls["gemini"] == 0
+    assert (trace.route, trace.answered_by, trace.fallback_enabled, trace.fallback_attempted) == ("self", "self", True, False)
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+async def test_self_failure_falls_back_to_gemini(fallback, status):
+    fallback.set_self(HTTPException(status_code=status))
+    result, trace = await _score_traced()
+    assert result == ScoreResult(GEMINI_RESULT, "gemini")
+    assert fallback.calls["gemini"] == 1
+    assert (trace.route, trace.answered_by, trace.self_error_status) == ("self", "gemini", status)
+    assert (trace.fallback_attempted, trace.fallback_succeeded, trace.fallback_skip_reason) == (True, True, None)
+    assert trace.self_call["last_error"] == "ReadTimeout"  # 자체 모델 쪽 원인도 남는다
+
+
+async def test_self_waits_less_to_leave_room_for_gemini(fallback):
+    import asyncio
+
+    fallback.set_self(VLM_RESULT)
+    started = asyncio.get_running_loop().time()
+    await _score_traced()
+    left_for_gemini = started + 20.0 - fallback.calls["self"][0]
+    expected = pipeline_verify.vlm_client.MIN_GEMINI_START_BUDGET_SECONDS + pipeline_verify.vlm_client.BUDGET_MARGIN_SECONDS
+    assert left_for_gemini == pytest.approx(expected, abs=0.05)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        pytest.param(HTTPException(status_code=422), id="other-http-error"),
+        pytest.param(RuntimeError("클라이언트 미시작"), id="program-error"),
+    ],
+)
+async def test_other_errors_do_not_fall_back(fallback, outcome):
+    fallback.set_self(outcome)
+    with pytest.raises(type(outcome)):
+        await _score_traced()
+    assert fallback.calls["gemini"] == 0
+
+
+@pytest.mark.parametrize("judged", ["retry", "fail"])
+async def test_normal_retry_or_fail_answer_does_not_fall_back(fallback, judged):
+    score = {"retry": 40, "fail": 10}[judged]
+    fallback.set_self(VlmResult(detected_labels=[], landmark_confidence=10, match_score=score, retry_hint=""))
+    result, trace = await _score_traced()
+    assert result.answered_by == "self" and fallback.calls["gemini"] == 0
+    assert trace.answered_by == "self"
+
+
+async def test_fallback_gemini_error_is_returned_as_gemini_error(fallback):
+    fallback.set_self(HTTPException(status_code=504))
+    fallback.set_gemini(_api_error(429))
+    with pytest.raises(HTTPException) as exc:
+        await _score_traced()
+    assert (exc.value.status_code, exc.value.headers) == (429, {"Retry-After": "30"})  # Gemini 쪽 헤더
+
+
+async def test_fallback_gemini_failure_leaves_no_answerer(fallback):
+    fallback.set_self(HTTPException(status_code=504))
+    fallback.set_gemini(_api_error(500))
+    trace = pipeline_verify.VerifyTrace()
+    with pytest.raises(HTTPException):
+        await pipeline_verify.score_photo(b"jpeg", "첨성대", "첨성대 정면이 보이게 찍기", trace)
+    assert (trace.answered_by, trace.fallback_attempted, trace.fallback_succeeded) == (None, True, False)
+
+
+async def test_not_enough_time_keeps_the_self_error(fallback, monkeypatch):
+    # 자체 모델이 늦게 실패해 Gemini 몫이 모자라면, 원인을 504로 바꾸지 않고 자체 모델 에러를 돌려준다
+    import asyncio
+
+    monkeypatch.setattr(settings, "verify_model_budget_seconds", 0.4)
+    monkeypatch.setattr(pipeline_verify.vlm_client, "MIN_GEMINI_START_BUDGET_SECONDS", 0.3)
+    monkeypatch.setattr(pipeline_verify.vlm_client, "BUDGET_MARGIN_SECONDS", 0.0)
+
+    async def late_502():
+        await asyncio.sleep(0.2)
+        raise HTTPException(status_code=502)
+
+    fallback.set_self(late_502)
+    trace = pipeline_verify.VerifyTrace()
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.score_photo(b"jpeg", "첨성대", "첨성대 정면이 보이게 찍기", trace)
+    assert exc.value.status_code == 502
+    assert fallback.calls["gemini"] == 0
+    assert trace.fallback_skip_reason == "insufficient_budget"
+
+
+async def test_gemini_past_the_budget_is_504(fallback, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(settings, "verify_model_budget_seconds", 0.3)
+    monkeypatch.setattr(pipeline_verify.vlm_client, "MIN_GEMINI_START_BUDGET_SECONDS", 0.1)
+    monkeypatch.setattr(pipeline_verify.vlm_client, "BUDGET_MARGIN_SECONDS", 0.0)
+
+    async def slow_gemini():
+        await asyncio.sleep(5)
+        return GEMINI_RESULT
+
+    fallback.set_self(HTTPException(status_code=502))
+    fallback.set_gemini(slow_gemini)
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(HTTPException) as exc:
+        await _score_traced()
+    assert exc.value.status_code == 504
+    assert asyncio.get_running_loop().time() - started < 2
+
+
+@pytest.mark.parametrize("hour", [8, 17, 23])
+async def test_off_hours_go_straight_to_gemini(fallback, hour):
+    fallback.clock["now"] = fallback.clock["now"].replace(hour=hour)
+    fallback.set_self(AssertionError("운영 시간 밖에는 자체 모델을 부르지 않음"))
+    result, trace = await _score_traced()
+    assert result == ScoreResult(GEMINI_RESULT, "gemini")
+    assert (trace.route, trace.fallback_attempted, trace.answered_by) == ("off_hours", False, "gemini")
+
+
+async def test_off_hours_gemini_is_also_bounded_by_the_budget(fallback, monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(settings, "verify_model_budget_seconds", 0.3)
+    fallback.clock["now"] = fallback.clock["now"].replace(hour=20)
+
+    async def slow_gemini():
+        await asyncio.sleep(5)
+        return GEMINI_RESULT
+
+    fallback.set_gemini(slow_gemini)
+    with pytest.raises(HTTPException) as exc:
+        await _score_traced()
+    assert exc.value.status_code == 504
+
+
+async def test_serving_hours_use_korean_time_not_utc(fallback):
+    # UTC 00:30은 한국 09:30이라 운영 시간 안이다(날짜가 바뀌는 경우)
+    from datetime import UTC, datetime
+
+    from app.core.time import SERVICE_TIMEZONE
+
+    fallback.clock["now"] = datetime(2026, 10, 20, 0, 30, tzinfo=UTC).astimezone(SERVICE_TIMEZONE)
+    fallback.set_self(VLM_RESULT)
+    result, _ = await _score_traced()
+    assert result.answered_by == "self"
+
+
+async def test_without_budget_self_errors_are_returned_as_before(fallback, monkeypatch):
+    monkeypatch.setattr(settings, "verify_model_budget_seconds", None)
+    monkeypatch.setattr(settings, "vlm_serving_hours", "")
+    fallback.set_self(HTTPException(status_code=504))
+    trace = pipeline_verify.VerifyTrace()
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_verify.score_photo(b"jpeg", "첨성대", "첨성대 정면이 보이게 찍기", trace)
+    assert exc.value.status_code == 504
+    assert fallback.calls["gemini"] == 0 and fallback.calls["self"] == [None]
+    assert (trace.route, trace.fallback_enabled) == ("self", False)
+
+
+async def test_gemini_backend_ignores_fallback_settings(fallback, monkeypatch):
+    monkeypatch.setattr(settings, "verify_backend", "gemini")
+    fallback.set_self(AssertionError("자체 모델을 부르면 안 됨"))
+    result, trace = await _score_traced()
+    assert result == ScoreResult(GEMINI_RESULT, "gemini")
+    assert (trace.route, trace.fallback_enabled) == ("gemini_backend", False)
+
+
+async def test_cancel_during_self_is_not_a_fallback(fallback):
+    import asyncio
+
+    async def hang():
+        await asyncio.sleep(5)
+
+    fallback.set_self(hang)
+    task = asyncio.create_task(_score_traced())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert fallback.calls["gemini"] == 0
+
+
+async def test_off_hours_question_mode_grades_with_gemini_thresholds(fallback, fake_verify_steps, monkeypatch):
+    # 객관식·점수 기준 없음 설정이어도, 운영 시간 밖 Gemini 답은 Gemini 기준(90/40)이다. 95점 → 성공
+    monkeypatch.setattr(settings, "vlm_format", "question")
+    monkeypatch.setattr(settings, "self_success_threshold", None)
+    monkeypatch.setattr(pipeline_verify, "score_photo", REAL_SCORE_PHOTO)  # fake_verify_steps가 바꾼 것을 되돌린다
+    fallback.clock["now"] = fallback.clock["now"].replace(hour=22)
+    res = await pipeline_verify.verify_photo(_verify_request(None))
+    assert (res.result, res.match_score) == ("success", 95)

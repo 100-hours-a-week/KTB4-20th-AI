@@ -1,6 +1,9 @@
+import asyncio
 import io
 import logging
 import math
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Literal, NamedTuple, cast
 from urllib.parse import urlparse
 
@@ -11,6 +14,7 @@ from google.genai import errors, types
 from PIL import Image, ImageOps
 
 from app.core.config import settings
+from app.core.time import SERVICE_TIMEZONE
 from app.photomissions import vlm_client
 from app.photomissions.gemini_client import generate_structured
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
@@ -79,6 +83,35 @@ QUESTION_RETRY_HINTS: list[tuple[str, str, str]] = [
     ("target", "short", "미션 대상이 더 잘 보이게 다시 찍어주세요"),
     ("condition", "no", "미션 조건이 사진에 보이도록 다시 찍어주세요"),
 ]
+
+
+# 자체 모델 호출이 이 상태로 끝나면 Gemini로 다시 판정한다(폴백 설정 시). 정상 판정(retry·fail 포함)은 넘기지 않는다
+# 429도 넘기므로 자체 모델 호출 제한이 Gemini 트래픽·비용으로 바뀐다
+FALLBACK_STATUSES = frozenset({429, 502, 503, 504})
+
+type Route = Literal["self", "off_hours", "gemini_backend", "not_started"]
+
+
+@dataclass
+class VerifyTrace:
+    # 요청 한 건의 모델 판정 경로 기록. 요청마다 새로 만든다. 사진·키·주소·에러 원문은 넣지 않는다
+    route: Route = "not_started"  # self: 자체 모델 먼저 / off_hours: 운영 시간 밖이라 바로 Gemini / gemini_backend: 설정이 gemini
+    answered_by: AnsweredBy | None = None  # 모델이 정상적으로 답했을 때만(성공 판정이라는 뜻이 아니다)
+    fallback_enabled: bool = False
+    fallback_attempted: bool = False
+    fallback_succeeded: bool = False
+    fallback_skip_reason: str | None = None
+    self_error_status: int | None = None  # 이 서버가 매핑한 상태(504 등). 실제 상대 서버 상태는 self_call["upstream_status"]
+    self_call: dict = field(default_factory=dict)  # vlm_client.score가 채우는 기록(시도 횟수·상대 상태·원인·걸린 시간)
+    budget_sec: float | None = None
+    self_sec: float | None = None
+    gemini_sec: float | None = None
+    model_stage_sec: float | None = None
+
+
+def _now_in_service_timezone() -> datetime:
+    # 운영 시간 판단용 시계. 테스트에서 바꿔 끼운다(마감은 이벤트 루프의 단조 시계로 따로 잰다)
+    return datetime.now(SERVICE_TIMEZONE)
 
 
 def thresholds_for(answered_by: AnsweredBy) -> Thresholds:
@@ -202,13 +235,80 @@ def prepare_image(image_bytes: bytes) -> bytes:
 
 
 async def score_photo(
-    image_bytes: bytes, place_name: str, mission_description: str
+    image_bytes: bytes, place_name: str, mission_description: str, trace: VerifyTrace | None = None,
 ) -> ScoreResult:
     # 5. 사진 판정 - 이미지+장소명+미션 내용을 VLM한테 주고 관찰→인식→판단→조언을 한 번에 받음
     # VERIFY_BACKEND가 판정 모델을 정한다. 자체 모델의 시간 제한·에러 처리는 vlm_client가 맡는다
-    if settings.verify_backend == "self":
-        return ScoreResult(await vlm_client.score(image_bytes, place_name, mission_description), "self")
-    return ScoreResult(await _score_with_gemini(image_bytes, place_name, mission_description), "gemini")
+    # self + VERIFY_MODEL_BUDGET_SECONDS면 자체 모델이 실패하거나 운영 시간 밖일 때 Gemini로 판정한다(전체 예산 안에서)
+    t = trace if trace is not None else VerifyTrace()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    args = (image_bytes, place_name, mission_description)
+    try:
+        if settings.verify_backend != "self":
+            t.route = "gemini_backend"
+            return await _gemini(t, *args)
+        budget = settings.verify_model_budget_seconds
+        if budget is None:  # 폴백 없음: 자체 모델 결과·에러를 그대로 돌려준다
+            t.route = "self"
+            return await _self(t, *args)
+        t.fallback_enabled, t.budget_sec = True, budget
+        return await _with_fallback(t, started + budget, *args)
+    finally:
+        t.model_stage_sec = round(loop.time() - started, 3)
+
+
+async def _with_fallback(t: VerifyTrace, model_deadline: float, *args) -> ScoreResult:
+    # 마감은 진입할 때 한 번 정하고, 운영 시간 판단도 진입할 때 한 번만 한다(도중에 종료 시각을 넘어도 그대로 끝낸다)
+    # 자체 모델·Gemini 모두 이 마감 안에서만 돈다. 실제로 마감을 넘기면 504
+    loop = asyncio.get_running_loop()
+    try:
+        async with asyncio.timeout_at(model_deadline + vlm_client.DEADLINE_GUARD):
+            hours = vlm_client.parse_serving_hours(settings.vlm_serving_hours)
+            if not vlm_client.in_serving_hours(_now_in_service_timezone(), hours):
+                t.route = "off_hours"  # 폴백이 아니다. 폴백률에 섞지 않는다
+                return await _gemini(t, *args)
+            t.route = "self"
+            # Gemini 몫과 여유를 남기고 자체 모델을 기다린다. 설정 마감(VLM_DEADLINE_SECONDS)이 더 이르면 그쪽이다
+            self_deadline = model_deadline - vlm_client.MIN_GEMINI_START_BUDGET_SECONDS - vlm_client.BUDGET_MARGIN_SECONDS
+            try:
+                return await _self(t, *args, deadline=self_deadline)
+            except HTTPException as e:
+                if e.status_code not in FALLBACK_STATUSES:
+                    raise
+                t.self_error_status = e.status_code
+                if model_deadline - loop.time() < vlm_client.MIN_GEMINI_START_BUDGET_SECONDS:
+                    # 시간이 남았어도 Gemini를 끝낼 만큼은 아니다. 원인을 504로 바꾸지 않고 자체 모델 에러를 그대로 둔다
+                    t.fallback_skip_reason = "insufficient_budget"
+                    raise
+                t.fallback_attempted = True
+                result = await _gemini(t, *args)
+                t.fallback_succeeded = True
+                return result
+    except TimeoutError as e:  # 모델 단계 전체 마감을 넘김. timeout 컨텍스트 바깥에서 바꾼다
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과") from e
+
+
+async def _self(t: VerifyTrace, *args, deadline: float | None = None) -> ScoreResult:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        result = ScoreResult(await vlm_client.score(*args, deadline=deadline, trace=t.self_call), "self")
+    finally:
+        t.self_sec = round(loop.time() - started, 3)
+    t.answered_by = "self"
+    return result
+
+
+async def _gemini(t: VerifyTrace, *args) -> ScoreResult:
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        result = ScoreResult(await _score_with_gemini(*args), "gemini")
+    finally:
+        t.gemini_sec = round(loop.time() - started, 3)
+    t.answered_by = "gemini"
+    return result
 
 
 async def _score_with_gemini(image_bytes: bytes, place_name: str, mission_description: str) -> VlmResult:
