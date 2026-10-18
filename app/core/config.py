@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     place_selection_mode: Literal["rule", "model"] = "rule"
     model_dir: str = ""  # model.onnx와 codes.json이 있는 폴더(CPU 경로)
     model_cpu_max_concurrency: int = 2
+    model_first_place_top_k: int = 30  # 첫 장소를 모델 상위 K곳 중 무작위로 고른다(ADR-0007). 1이면 모델 1위로 고정
     runpod_model_url: str = ""  # 장소 선정 모델 전용 RunPod 엔드포인트 주소(비어 있으면 GPU 경로를 쓰지 않음)
     runpod_model_api_key: str = ""
     runpod_model_timeout_seconds: float = 20.0  # 백엔드 → AI 읽기 타임아웃(30초)보다 짧게

@@ -38,7 +38,7 @@ class _Gpu:
     def __init__(self, behavior):
         self.behavior, self.calls = behavior, 0
 
-    def generate(self, header, slots, width=10):
+    def generate(self, header, slots, width=10, first_k=1, seed=None):
         self.calls += 1
         if self.behavior == "fail":
             raise InferenceUnavailable("x")
@@ -46,7 +46,7 @@ class _Gpu:
 
 
 class _Cpu:
-    def generate(self, header, slots, width=10):
+    def generate(self, header, slots, width=10, first_k=1, seed=None):
         return ["B"] * len(slots)
 
 
@@ -128,8 +128,9 @@ def test_selection_limits_non_food_slots_to_top_two_preference_categories(monkey
     seen = {}
 
     class FakeRouter:
-        def generate(self, header, slots, width=10):
+        def generate(self, header, slots, width=10, first_k=1, seed=None):
             seen["slots"] = slots
+            seen["first_k"], seen["seed"] = first_k, seed
             return [s[0] if s else None for s in slots], "cpu"
 
     members = [Member_Survey(user=User(user_id="u"), survey_result=[5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1])]
@@ -166,10 +167,90 @@ def test_selection_adds_next_ranked_category_when_top_two_have_too_few_places(mo
     seen, trace = {}, {}
 
     class FakeRouter:
-        def generate(self, header, slots, width=10):
+        def generate(self, header, slots, width=10, first_k=1, seed=None):
             seen["slots"] = slots
+            seen["first_k"], seen["seed"] = first_k, seed
             return [s[0] if s else None for s in slots], "cpu"
 
     selection.select_places_by_model(plan, [], E_Region.SEOUL, members, FakeRouter(), trace=trace)
     assert trace["daytime_categories"] == [first, second, third]
     assert set(seen["slots"][0]) == {"x1", "y1", "y2"}
+
+
+
+def _ranked_codes(n):
+    # c1이 1..n인 장소 n곳. 가짜 모델은 c1이 작을수록 높은 점수를 준다(1번 장소가 1위)
+    return {chr(ord("A") + i): (i + 1, 1, 1, 0) for i in range(n)}
+
+
+def _prefer_small_c1(n):
+    first_tokens = [place_tokens((i + 1, 1, 1, 0))[0] for i in range(n)]
+
+    def fn(prefixes):
+        out = []
+        for _ in prefixes:
+            lp = [math.log(1e-6)] * VOCAB_SIZE
+            for i, t in enumerate(first_tokens):
+                lp[t] = math.log(0.5) - 0.3 * i  # 앞 번호일수록 높다
+            out.append(lp)
+        return out
+
+    return fn
+
+
+def test_first_slot_picks_among_top_k_with_a_fixed_seed():
+    codes = _ranked_codes(8)
+    slots = [list(codes), list(codes)]
+    fn = _prefer_small_c1(8)
+    header = generation.preference_header(["HISTORY_CULTURE", "ACTIVITY"], "서울")
+    top1 = generation.generate_itinerary(header, slots, codes, fn)
+    assert top1[0] == "A"  # first_k=1은 모델 1위
+    picks = {generation.generate_itinerary(header, slots, codes, fn, first_k=3, seed=s)[0] for s in range(40)}
+    assert picks == {"A", "B", "C"}  # 상위 3곳 안에서만, 시드에 따라 달라진다
+    one = generation.generate_itinerary(header, slots, codes, fn, first_k=3, seed=7)
+    assert one == generation.generate_itinerary(header, slots, codes, fn, first_k=3, seed=7)  # 같은 시드는 같은 결과
+    assert one[1] != one[0]  # 둘째 슬롯은 첫 장소를 제외한 후보에서 고른다
+
+
+def test_first_k_one_ignores_the_seed_and_later_slots_stay_deterministic():
+    codes = _ranked_codes(6)
+    slots = [list(codes), list(codes), list(codes)]
+    fn = _prefer_small_c1(6)
+    header = generation.preference_header(["HISTORY_CULTURE", "ACTIVITY"], "서울")
+    assert generation.generate_itinerary(header, slots, codes, fn, first_k=1, seed=1) == generation.generate_itinerary(header, slots, codes, fn, first_k=1, seed=99)
+    # first_k가 커도 둘째 슬롯부터는 모델 1위(남은 후보 중)로 고정된다
+    result = generation.generate_itinerary(header, slots, codes, fn, first_k=4, seed=3)
+    remaining = [g for g in codes if g != result[0]]
+    assert result[1] == remaining[0] and result[2] == remaining[1]
+
+
+def test_first_k_is_clamped_and_empty_first_slot_stays_none():
+    codes = _ranked_codes(3)
+    fn = _prefer_small_c1(3)
+    header = generation.preference_header(["HISTORY_CULTURE", "ACTIVITY"], "서울")
+    out = generation.generate_itinerary(header, [list(codes)], codes, fn, first_k=10_000, seed=1)
+    assert out[0] in codes  # 상한을 넘어도 후보 수만큼만
+    assert generation.generate_itinerary(header, [[], list(codes)], codes, fn, first_k=5, seed=1)[0] is None
+
+
+def test_selection_passes_first_k_and_seed_to_the_router(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.trips.schemas.schemas import E_Region, Member_Survey, User
+    from app.trips.services.model import selection
+    from app.trips.services.slot_plan import build_slot_plan
+
+    pools = {c: [SimpleNamespace(id=f"{c}{i}", matched_preferences=[], selected_for=[]) for i in range(3)] for c in
+             ("HISTORY_CULTURE", "NATURE_HEALING", "ACTIVITY", "CONVENIENCE_SHOPPING", "FOOD")}
+    monkeypatch.setattr(selection, "get_DB_places_by_category", lambda category, limit, region, **kw: list(pools[category.value]))
+    seen = {}
+
+    class FakeRouter:
+        def generate(self, header, slots, width=10, first_k=1, seed=None):
+            seen["first_k"], seen["seed"] = first_k, seed
+            return [s[0] if s else None for s in slots], "cpu"
+
+    members = [Member_Survey(user=User(user_id="u"), survey_result=[5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1])]
+    plan = build_slot_plan(members, selection.model_slot_plan_seed())
+    selection.select_places_by_model(plan, [], E_Region.SEOUL, members, FakeRouter(), first_k=30, seed=12345)
+    assert seen == {"first_k": 30, "seed": 12345}

@@ -37,7 +37,7 @@ def model_slot_plan_seed() -> random.Random:
 
 def select_places_by_model(
     slot_plan: Slot_Plan, deal_breakers: list[E_Breaker], region: E_Region, members: list[Member_Survey],
-    router: InferenceRouter, width: int = BEAM_WIDTH, trace: dict | None = None,
+    router: InferenceRouter, width: int = BEAM_WIDTH, trace: dict | None = None, first_k: int = 1, seed: int | None = None,
 ) -> tuple[list[Place], str]:
     direct_excluded: set[str] = set()
     for breaker in deal_breakers:
@@ -83,7 +83,7 @@ def select_places_by_model(
     top_two = [c.value for c in slot_plan.daytime_category_ranking[:2]]
     header = preference_header(top_two, region.value)
 
-    chosen, route = router.generate(header, [[p.id for p in pool] for pool in slot_pools], width)
+    chosen, route = router.generate(header, [[p.id for p in pool] for pool in slot_pools], width, first_k, seed)
 
     places: list[Place] = []
     matched: dict[E_Preference, list[str]] = {}
