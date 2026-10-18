@@ -67,7 +67,9 @@ class ScoreResult(NamedTuple):
 
 
 # 객관식은 점수가 없어서 응답의 match_score(0~100 필수)에 등급 대표값을 넣는다. 모델 확신도가 아니다
-# TODO: BE·앱이 match_score를 표시·저장·통계에 쓰는지 확인 후 확정 (Gemini 실제 점수와 같은 그래프에 섞으면 안 됨)
+# BE 확인(10/18): 완료 처리는 result로만 하고, match_score는 0~100 검증 후 저장한다.
+# 화면 일치도 구간(90 이상 성공 / 40~89 재시도 / 40 미만 실패)과 이 대표값이 맞는다.
+# 저장된 값으로 통계를 낼 때는 Gemini 실제 점수와 섞이지 않게 판정 모델별로 구분해야 한다
 QUESTION_GRADE_SCORE: dict[Grade, float] = {"success": 100.0, "retry": 50.0, "fail": 0.0}
 
 # 객관식 재시도 안내. 어떤 조건을 어겼는지는 답에 없어서 구체적인 이유를 추측하지 않는다
