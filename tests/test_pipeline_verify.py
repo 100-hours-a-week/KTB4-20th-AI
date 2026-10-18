@@ -15,6 +15,7 @@ from app.photomissions.pipeline_verify import (
     assert_allowed_source,
     build_response,
     is_clear_mismatch,
+    location_mismatch_response,
     normalize_image,
     prepare_image,
     to_grade,
@@ -270,13 +271,24 @@ def test_self_backend_uses_its_own_thresholds(monkeypatch):
     assert build_response(80, raw_landmark_confidence=50).landmark_confidence == 50  # Gemini 기준이면 숨김
 
 
-def test_location_mismatch_response():
-    res = build_response(match_score=0, reason="location_mismatch")
+@pytest.mark.parametrize(("success", "retry"), [(90.0, 40.0), (50.0, 0.0), (0.0, 0.0)])
+def test_location_mismatch_is_fail_whatever_the_thresholds(monkeypatch, success, retry):
+    # 위치 반려는 사전 판정이라 기준과 무관하다. 기준 0점이어도 재시도·성공이 되면 안 된다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "self_success_threshold", success)
+    monkeypatch.setattr(settings, "self_retry_threshold", retry)
+    monkeypatch.setattr(settings, "self_landmark_threshold", 0.0)
+    res = location_mismatch_response()
     assert res.result == "fail"
     assert res.reason == "location_mismatch"
+    assert res.match_score == 0
     assert res.detected_labels == []
     assert res.landmark_confidence is None
     assert res.retry_hint is None
+
+
+def test_model_response_has_no_reason():
+    assert build_response(90).reason is None
 
 
 def test_detected_labels_passed_through():

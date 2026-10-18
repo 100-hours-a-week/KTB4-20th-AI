@@ -226,12 +226,24 @@ def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:
     return "fail"
 
 
+def location_mismatch_response() -> VerifyResponse:
+    # 2번에서 끝난 사전 판정이라 모델 점수·기준을 거치지 않고 항상 실패다
+    # 0점을 등급 기준에 넣으면 self 기준이 0일 때 재시도나 성공이 된다(SELF_*_THRESHOLD는 0을 허용한다)
+    return VerifyResponse(
+        result="fail",
+        reason="location_mismatch",
+        match_score=0,
+        detected_labels=[],
+        landmark_confidence=None,
+        retry_hint=None,
+    )
+
+
 def build_response(
     match_score: float,
     detected_labels: list[DetectedLabel] | None = None,
     raw_landmark_confidence: float | None = None,
     raw_retry_hint: str | None = None,
-    reason: Literal["location_mismatch"] | None = None,
 ) -> VerifyResponse:
     # 7. 응답 조립 - landmark_confidence·retry_hint의 노출 여부를 임계값·등급으로 정한다. 문구는 안 붙임
     # 등급은 점수로만 정해지므로 받지 않고 여기서 6번을 호출한다. 점수와 어긋난 등급이 응답에 들어갈 수 없다
@@ -244,7 +256,7 @@ def build_response(
     retry_hint = raw_retry_hint if result == "retry" else None
     return VerifyResponse(
         result=result,
-        reason=reason,
+        reason=None,
         match_score=match_score,
         detected_labels=detected_labels or [],
         landmark_confidence=landmark_confidence,
@@ -261,7 +273,7 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
     if request.photo_coordinates is not None and is_clear_mismatch(  # 2
         request.photo_coordinates, request.place_coordinates
     ):
-        return build_response(match_score=0, reason="location_mismatch")  # 6번에서 fail이 된다
+        return location_mismatch_response()
 
     image_bytes = await fetch_image(request.image_url)  # 3
     processed = prepare_image(image_bytes)  # 4

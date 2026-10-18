@@ -445,6 +445,18 @@ async def test_far_photo_rejected_before_download_and_vlm(fake_verify_steps):
     assert fake_verify_steps == {"fetch_image": 0, "score_photo": 0}
 
 
+async def test_far_photo_is_fail_even_with_zero_self_thresholds(fake_verify_steps, monkeypatch):
+    # 예전에는 0점을 등급 기준에 넣어서, self 재시도 기준이 0이면 위치 반려가 재시도가 됐다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "self_success_threshold", 0.0)
+    monkeypatch.setattr(settings, "self_retry_threshold", 0.0)
+    monkeypatch.setattr(settings, "self_landmark_threshold", 0.0)
+    seoul = Coordinates(latitude=37.5665, longitude=126.9780)
+    res = await pipeline_verify.verify_photo(_verify_request(seoul))
+    assert (res.result, res.reason, res.match_score) == ("fail", "location_mismatch", 0)
+    assert fake_verify_steps == {"fetch_image": 0, "score_photo": 0}
+
+
 async def test_backend_tag_is_set_even_when_rejected_before_vlm(fake_verify_steps, monkeypatch):
     # 위치로 반려돼 모델을 부르지 않은 요청도 Sentry에서 백엔드별로 볼 수 있어야 한다
     tags = {}
