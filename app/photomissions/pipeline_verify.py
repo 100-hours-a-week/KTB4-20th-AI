@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.photomissions import vlm_client
 from app.photomissions.gemini_client import generate_structured
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
+from app.photomissions.question_format import Grade, QuestionAnswer, rule_grade
 from app.photomissions.schemas import (
     Coordinates,
     DetectedLabel,
@@ -60,8 +61,22 @@ type AnsweredBy = Literal["self", "gemini"]
 
 class ScoreResult(NamedTuple):
     # 판정 결과와 그 판정을 실제로 낸 모델. 점수 분포가 모델마다 달라 등급 기준을 고를 때 쓴다
-    vlm: VlmResult
+    # vlm은 점수 형식(VlmResult)이거나 자체 모델 객관식(QuestionAnswer)이다. 등급을 정하는 길은 이 타입으로 고른다
+    vlm: VlmResult | QuestionAnswer
     answered_by: AnsweredBy
+
+
+# 객관식은 점수가 없어서 응답의 match_score(0~100 필수)에 등급 대표값을 넣는다. 모델 확신도가 아니다
+# TODO: BE·앱이 match_score를 표시·저장·통계에 쓰는지 확인 후 확정 (Gemini 실제 점수와 같은 그래프에 섞으면 안 됨)
+QUESTION_GRADE_SCORE: dict[Grade, float] = {"success": 100.0, "retry": 50.0, "fail": 0.0}
+
+# 객관식 재시도 안내. 어떤 조건을 어겼는지는 답에 없어서 구체적인 이유를 추측하지 않는다
+# 여러 원인이 겹치면 위에서부터 하나만 쓴다(장소 → 대상 → 조건). 정확도로 정한 순서가 아니라 안내 정책이다
+QUESTION_RETRY_HINTS: list[tuple[str, str, str]] = [
+    ("place", "unknown", "목표 장소의 특징이 보이게 다시 찍어주세요"),
+    ("target", "short", "미션 대상이 더 잘 보이게 다시 찍어주세요"),
+    ("condition", "no", "미션 조건이 사진에 보이도록 다시 찍어주세요"),
+]
 
 
 def thresholds_for(answered_by: AnsweredBy) -> Thresholds:
@@ -237,6 +252,24 @@ def to_grade(match_score: float, thresholds: Thresholds) -> Literal["success", "
     return "fail"
 
 
+def question_response(answer: QuestionAnswer) -> VerifyResponse:
+    # 6·7. 자체 모델 객관식 - 등급은 답에서 규칙으로 한 번만 정한다. 점수 기준(to_grade)을 다시 거치지 않는다
+    result = rule_grade(answer)
+    retry_hint = (
+        next((hint for field, value, hint in QUESTION_RETRY_HINTS if getattr(answer, field) == value), None)
+        if result == "retry"
+        else None
+    )
+    return VerifyResponse(
+        result=result,
+        reason=None,  # 사진으로 본 "다른 장소"는 GPS 위치 반려(location_mismatch)와 다르다
+        match_score=QUESTION_GRADE_SCORE[result],
+        detected_labels=[],
+        landmark_confidence=None,
+        retry_hint=retry_hint,
+    )
+
+
 def location_mismatch_response() -> VerifyResponse:
     # 2번에서 끝난 사전 판정이라 모델 점수·기준을 거치지 않고 항상 실패다
     # 0점을 등급 기준에 넣으면 self 기준이 0일 때 재시도나 성공이 된다(SELF_*_THRESHOLD는 0을 허용한다)
@@ -291,6 +324,8 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
     processed = prepare_image(image_bytes)  # 4
     scored = await score_photo(processed, request.place_name, request.mission_description)  # 5
     vlm = scored.vlm
+    if isinstance(vlm, QuestionAnswer):  # 설정이 아니라 실제로 받은 답의 형식으로 고른다
+        return question_response(vlm)  # 6·7
 
     # VLM 원값을 그대로 7번에 넘긴다. 등급(6번)과 노출 여부는 build_response가 답한 모델의 기준으로 정한다.
     return build_response(  # 6·7

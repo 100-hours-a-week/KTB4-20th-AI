@@ -20,9 +20,11 @@ from app.photomissions.pipeline_verify import (
     location_mismatch_response,
     normalize_image,
     prepare_image,
+    question_response,
     thresholds_for,
     to_grade,
 )
+from app.photomissions.question_format import QuestionAnswer
 from app.photomissions.schemas import Coordinates, DetectedLabel
 
 ALLOWED_HOST = "my-bucket.s3.ap-northeast-2.amazonaws.com"
@@ -321,3 +323,65 @@ def test_detected_labels_passed_through():
     expected_labels = [DetectedLabel(name="석탑", matched=True)]
     result = build_response(90, GEMINI_THRESHOLDS, detected_labels=input_labels).detected_labels
     assert result == expected_labels
+
+
+# 7-2. question_response — 자체 모델 객관식. 등급은 규칙으로 한 번만, 점수는 등급 대표값
+
+def _answer(**fields) -> QuestionAnswer:
+    return QuestionAnswer(**{"judgeable": "yes", "target": "enough", "condition": "na", "place": "yes", **fields})
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        (_answer(), ("success", 100.0, None)),
+        (_answer(place="na"), ("success", 100.0, None)),
+        (_answer(target="short"), ("retry", 50.0, "미션 대상이 더 잘 보이게 다시 찍어주세요")),
+        (_answer(condition="no"), ("retry", 50.0, "미션 조건이 사진에 보이도록 다시 찍어주세요")),
+        (_answer(place="unknown"), ("retry", 50.0, "목표 장소의 특징이 보이게 다시 찍어주세요")),
+        # 원인이 겹치면 장소 → 대상 → 조건 순서로 하나만
+        (_answer(target="short", condition="no", place="unknown"), ("retry", 50.0, "목표 장소의 특징이 보이게 다시 찍어주세요")),
+        (_answer(target="short", condition="no"), ("retry", 50.0, "미션 대상이 더 잘 보이게 다시 찍어주세요")),
+        # 실패에는 안내가 없다
+        (QuestionAnswer(judgeable="no", target=None, condition=None, place=None), ("fail", 0.0, None)),
+        (_answer(target="none", condition=None, place="unknown"), ("fail", 0.0, None)),
+        (_answer(place="no"), ("fail", 0.0, None)),
+        # 실패 조건이 재시도 조건보다 먼저다
+        (QuestionAnswer(judgeable="no", target="short", condition="no", place="unknown"), ("fail", 0.0, None)),
+        (_answer(target="short", condition="no", place="no"), ("fail", 0.0, None)),
+        # 장소가 미션과 상관없으면(na) 장소 안내를 만들지 않는다
+        (_answer(place="na", condition="no"), ("retry", 50.0, "미션 조건이 사진에 보이도록 다시 찍어주세요")),
+    ],
+)
+def test_question_response(answer, expected):
+    res = question_response(answer)
+    assert (res.result, res.match_score, res.retry_hint) == expected
+    assert res.reason is None  # 사진으로 본 다른 장소는 GPS 위치 반려가 아니다
+    assert res.detected_labels == []
+    assert res.landmark_confidence is None
+
+
+def test_question_response_ignores_score_thresholds(self_settings):
+    # 객관식은 점수 기준을 읽지 않는다. self 기준이 무엇이든 같은 답이면 같은 결과다
+    assert question_response(_answer(target="short")).result == "retry"
+    assert question_response(_answer()).result == "success"
+
+
+def test_every_retry_answer_gets_a_hint():
+    # 검사를 통과하는 모든 답 조합에서 재시도면 안내가 있다. 등급 규칙만 바뀌고 안내가 빠지는 것을 막는다
+    import itertools
+
+    from pydantic import ValidationError
+
+    retries = 0
+    for judgeable, target, condition, place in itertools.product(
+        ("yes", "no"), ("enough", "short", "none", None), ("yes", "no", "na", None), ("yes", "no", "unknown", "na", None),
+    ):
+        try:
+            answer = QuestionAnswer(judgeable=judgeable, target=target, condition=condition, place=place)
+        except ValidationError:
+            continue
+        res = question_response(answer)
+        assert (res.retry_hint is not None) == (res.result == "retry"), answer
+        retries += res.result == "retry"
+    assert retries > 0
