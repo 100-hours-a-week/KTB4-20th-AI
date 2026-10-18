@@ -8,9 +8,11 @@ from app.core.config import settings
 from app.photomissions import pipeline_verify
 from app.photomissions.pipeline_verify import (
     CLEAR_MISMATCH_KM,
+    GEMINI_THRESHOLDS,
     LANDMARK_THRESHOLD,
     RETRY_THRESHOLD,
     SUCCESS_THRESHOLD,
+    Thresholds,
     _haversine_km,
     assert_allowed_source,
     build_response,
@@ -18,6 +20,7 @@ from app.photomissions.pipeline_verify import (
     location_mismatch_response,
     normalize_image,
     prepare_image,
+    thresholds_for,
     to_grade,
 )
 from app.photomissions.schemas import Coordinates, DetectedLabel
@@ -217,18 +220,18 @@ def test_prepare_allows_pillow_warning_zone(monkeypatch):
 # 6. to_grade — 임계값은 임시값이라 숫자 대신 상수로 경계를 확인
 
 def test_grade_success_at_threshold():
-    assert to_grade(SUCCESS_THRESHOLD) == "success"
-    assert to_grade(100) == "success"
+    assert to_grade(SUCCESS_THRESHOLD, GEMINI_THRESHOLDS) == "success"
+    assert to_grade(100, GEMINI_THRESHOLDS) == "success"
 
 
 def test_grade_retry_between_thresholds():
-    assert to_grade(SUCCESS_THRESHOLD - 0.1) == "retry"
-    assert to_grade(RETRY_THRESHOLD) == "retry"
+    assert to_grade(SUCCESS_THRESHOLD - 0.1, GEMINI_THRESHOLDS) == "retry"
+    assert to_grade(RETRY_THRESHOLD, GEMINI_THRESHOLDS) == "retry"
 
 
 def test_grade_fail_below_retry_threshold():
-    assert to_grade(RETRY_THRESHOLD - 0.1) == "fail"
-    assert to_grade(0) == "fail"
+    assert to_grade(RETRY_THRESHOLD - 0.1, GEMINI_THRESHOLDS) == "fail"
+    assert to_grade(0, GEMINI_THRESHOLDS) == "fail"
 
 
 # 7. build_response
@@ -239,36 +242,58 @@ def test_grade_fail_below_retry_threshold():
 )
 def test_result_follows_score(score):
     # 등급은 점수로만 정해진다. 경계값에서도 to_grade와 같아야 한다
-    assert build_response(score).result == to_grade(score)
+    assert build_response(score, GEMINI_THRESHOLDS).result == to_grade(score, GEMINI_THRESHOLDS)
 
 
 def test_landmark_confidence_hidden_below_threshold():
-    res = build_response(90, raw_landmark_confidence=LANDMARK_THRESHOLD - 0.1)
+    res = build_response(90, GEMINI_THRESHOLDS, raw_landmark_confidence=LANDMARK_THRESHOLD - 0.1)
     assert res.landmark_confidence is None
 
 
 def test_landmark_confidence_shown_at_threshold():
-    res = build_response(90, raw_landmark_confidence=LANDMARK_THRESHOLD)
+    res = build_response(90, GEMINI_THRESHOLDS, raw_landmark_confidence=LANDMARK_THRESHOLD)
     assert res.landmark_confidence == LANDMARK_THRESHOLD
 
 
 def test_retry_hint_only_on_retry():
     hint = "정면에서 다시 찍어보세요"
-    assert build_response(RETRY_THRESHOLD, raw_retry_hint=hint).retry_hint == hint
-    assert build_response(SUCCESS_THRESHOLD, raw_retry_hint=hint).retry_hint is None
-    assert build_response(RETRY_THRESHOLD - 0.1, raw_retry_hint=hint).retry_hint is None
+    assert build_response(RETRY_THRESHOLD, GEMINI_THRESHOLDS, raw_retry_hint=hint).retry_hint == hint
+    assert build_response(SUCCESS_THRESHOLD, GEMINI_THRESHOLDS, raw_retry_hint=hint).retry_hint is None
+    assert build_response(RETRY_THRESHOLD - 0.1, GEMINI_THRESHOLDS, raw_retry_hint=hint).retry_hint is None
 
 
-def test_self_backend_uses_its_own_thresholds(monkeypatch):
-    # 자체 모델은 Gemini 기준(90/40/60)이 아니라 SELF_* 설정값으로 판정한다
+SELF_THRESHOLDS = Thresholds(success=70.0, retry=30.0, landmark=50.0)
+
+
+def test_grade_uses_the_given_thresholds():
+    # 자체 모델은 Gemini 기준(90/40/60)이 아니라 넘겨받은 기준으로 판정한다
+    assert to_grade(70, SELF_THRESHOLDS) == "success"  # Gemini 기준이면 재시도
+    assert to_grade(35, SELF_THRESHOLDS) == "retry"  # Gemini 기준이면 실패
+    assert to_grade(29.9, SELF_THRESHOLDS) == "fail"
+    res = build_response(80, SELF_THRESHOLDS, raw_landmark_confidence=50, raw_retry_hint="다시")
+    assert (res.result, res.landmark_confidence, res.retry_hint) == ("success", 50, None)  # Gemini 기준이면 재시도·숨김
+    res = build_response(35, SELF_THRESHOLDS, raw_landmark_confidence=49.9, raw_retry_hint="다시")
+    assert (res.result, res.landmark_confidence, res.retry_hint) == ("retry", None, "다시")
+
+
+@pytest.fixture
+def self_settings(monkeypatch):
     monkeypatch.setattr(settings, "verify_backend", "self")
-    monkeypatch.setattr(settings, "self_success_threshold", 70.0)
-    monkeypatch.setattr(settings, "self_retry_threshold", 30.0)
-    monkeypatch.setattr(settings, "self_landmark_threshold", 50.0)
-    assert to_grade(70) == "success"  # Gemini 기준이면 재시도
-    assert to_grade(35) == "retry"  # Gemini 기준이면 실패
-    assert to_grade(29.9) == "fail"
-    assert build_response(80, raw_landmark_confidence=50).landmark_confidence == 50  # Gemini 기준이면 숨김
+    monkeypatch.setattr(settings, "self_success_threshold", SELF_THRESHOLDS.success)
+    monkeypatch.setattr(settings, "self_retry_threshold", SELF_THRESHOLDS.retry)
+    monkeypatch.setattr(settings, "self_landmark_threshold", SELF_THRESHOLDS.landmark)
+
+
+def test_thresholds_follow_the_answering_model_not_the_setting(self_settings):
+    # 설정이 self여도 Gemini가 답했다면 Gemini 기준이다(폴백 대비)
+    assert thresholds_for("self") == SELF_THRESHOLDS
+    assert thresholds_for("gemini") == GEMINI_THRESHOLDS
+
+
+def test_grading_does_not_read_the_setting(self_settings):
+    # 기준을 넘기면 설정을 다시 읽지 않는다. 설정이 self여도 Gemini 기준으로 넘기면 Gemini 결과다
+    assert to_grade(70, GEMINI_THRESHOLDS) == "retry"
+    assert build_response(70, GEMINI_THRESHOLDS).result == "retry"
 
 
 @pytest.mark.parametrize(("success", "retry"), [(90.0, 40.0), (50.0, 0.0), (0.0, 0.0)])
@@ -288,11 +313,11 @@ def test_location_mismatch_is_fail_whatever_the_thresholds(monkeypatch, success,
 
 
 def test_model_response_has_no_reason():
-    assert build_response(90).reason is None
+    assert build_response(90, GEMINI_THRESHOLDS).reason is None
 
 
 def test_detected_labels_passed_through():
     input_labels = [DetectedLabel(name="석탑", matched=True)]
     expected_labels = [DetectedLabel(name="석탑", matched=True)]
-    result = build_response(90, detected_labels=input_labels).detected_labels
+    result = build_response(90, GEMINI_THRESHOLDS, detected_labels=input_labels).detected_labels
     assert result == expected_labels
