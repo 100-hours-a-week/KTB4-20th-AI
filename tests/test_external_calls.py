@@ -445,7 +445,7 @@ def fake_verify_steps(monkeypatch):
         calls["fetch_image"] += 1
         return buf.getvalue()
 
-    async def fake_score(image_bytes, place_name, mission_description):
+    async def fake_score(image_bytes, place_name, mission_description, trace=None):
         calls["score_photo"] += 1
         return ScoreResult(VLM_RESULT, "gemini")
 
@@ -510,7 +510,7 @@ async def test_verify_grades_with_the_answering_models_thresholds(fake_verify_st
 
     vlm = VlmResult(detected_labels=[], landmark_confidence=55, match_score=85, retry_hint="정면에서 다시 찍어보세요")
 
-    async def fake_score(image_bytes, place_name, mission_description):
+    async def fake_score(image_bytes, place_name, mission_description, trace=None):
         return ScoreResult(vlm, answered_by)
 
     monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
@@ -528,7 +528,7 @@ async def test_verify_uses_question_rule_without_score_thresholds(fake_verify_st
     monkeypatch.setattr(settings, "self_landmark_threshold", None)
     answer = QuestionAnswer(judgeable="yes", target="short", condition="na", place="yes")
 
-    async def fake_score(image_bytes, place_name, mission_description):
+    async def fake_score(image_bytes, place_name, mission_description, trace=None):
         return ScoreResult(answer, "self")
 
     monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
@@ -542,7 +542,7 @@ async def test_gemini_answer_uses_gemini_thresholds_even_in_question_mode(fake_v
     monkeypatch.setattr(settings, "vlm_format", "question")
     monkeypatch.setattr(settings, "self_success_threshold", None)
 
-    async def fake_score(image_bytes, place_name, mission_description):
+    async def fake_score(image_bytes, place_name, mission_description, trace=None):
         return ScoreResult(VLM_RESULT, "gemini")  # 85점
 
     monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
@@ -574,7 +574,7 @@ async def test_vlm_gets_the_same_bytes_as_normalize_image(fake_verify_steps, mon
     # 정상 사진은 이번 수정 전과 같은 전처리 결과가 모델로 간다(측정 입력과 같아야 한다)
     seen = {}
 
-    async def fake_score(image_bytes, place_name, mission_description):
+    async def fake_score(image_bytes, place_name, mission_description, trace=None):
         seen["bytes"] = image_bytes
         return ScoreResult(VLM_RESULT, "gemini")
 
@@ -885,3 +885,113 @@ async def test_off_hours_question_mode_grades_with_gemini_thresholds(fallback, f
     fallback.clock["now"] = fallback.clock["now"].replace(hour=22)
     res = await pipeline_verify.verify_photo(_verify_request(None))
     assert (res.result, res.match_score) == ("success", 95)
+
+
+# 7. 요청별 판정 기록 한 줄 (uvicorn.error 로거, JSON)
+
+def _verify_logs(caplog) -> list[dict]:
+    import json
+
+    return [json.loads(r.getMessage().removeprefix("verify ")) for r in caplog.records if r.getMessage().startswith("verify {")]
+
+
+@pytest.fixture
+def full_fallback(fallback, fake_verify_steps, monkeypatch):
+    # 다운로드는 가짜, 모델 판정은 실제 score_photo(폴백 흐름)로
+    monkeypatch.setattr(pipeline_verify, "score_photo", REAL_SCORE_PHOTO)
+    return fallback
+
+
+async def test_log_for_self_answer(full_fallback, caplog):
+    full_fallback.set_self(VLM_RESULT)
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        res = await pipeline_verify.verify_photo(_verify_request(None))
+    [line] = _verify_logs(caplog)
+    assert line["route"] == "self" and line["answered_by"] == "self" and line["result"] == res.result
+    assert (line["fallback_enabled"], line["fallback_attempted"], line["final_status"], line["outcome"]) == (True, False, 200, "ok")
+    assert line["self_sec"] is not None and line["gemini_sec"] is None and line["budget_sec"] == 20.0
+
+
+async def test_log_for_fallback(full_fallback, caplog, monkeypatch):
+    tags = {}
+    monkeypatch.setattr(sentry_sdk, "set_tag", lambda key, value: tags.update({key: value}))
+    full_fallback.set_self(HTTPException(status_code=504))
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        await pipeline_verify.verify_photo(_verify_request(None))
+    [line] = _verify_logs(caplog)
+    assert (line["route"], line["answered_by"], line["self_error_status"], line["self_last_error"]) == ("self", "gemini", 504, "ReadTimeout")
+    assert (line["fallback_attempted"], line["fallback_succeeded"], line["final_status"]) == (True, True, 200)
+    assert line["gemini_sec"] is not None
+    assert tags["verify_answered_by"] == "gemini"
+
+
+async def test_log_for_off_hours_is_not_a_fallback(full_fallback, caplog):
+    full_fallback.clock["now"] = full_fallback.clock["now"].replace(hour=20)
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        await pipeline_verify.verify_photo(_verify_request(None))
+    [line] = _verify_logs(caplog)
+    assert (line["route"], line["answered_by"], line["fallback_attempted"], line["self_sec"]) == ("off_hours", "gemini", False, None)
+
+
+async def test_log_when_fallback_gemini_also_fails(full_fallback, caplog):
+    full_fallback.set_self(HTTPException(status_code=502))
+    full_fallback.set_gemini(_api_error(500))
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(HTTPException) as exc:
+        await pipeline_verify.verify_photo(_verify_request(None))
+    assert exc.value.status_code == 502  # 기록한 뒤 에러는 그대로 올라간다
+    [line] = _verify_logs(caplog)
+    assert (line["answered_by"], line["fallback_attempted"], line["fallback_succeeded"]) == (None, True, False)
+    assert (line["final_status"], line["outcome"], line["result"]) == (502, "error", None)
+
+
+async def test_log_for_location_mismatch_has_no_model(full_fallback, caplog, monkeypatch):
+    tags = {}
+    monkeypatch.setattr(sentry_sdk, "set_tag", lambda key, value: tags.update({key: value}))
+    seoul = Coordinates(latitude=37.5665, longitude=126.9780)
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        await pipeline_verify.verify_photo(_verify_request(seoul))
+    [line] = _verify_logs(caplog)
+    assert (line["route"], line["answered_by"], line["reason"], line["result"]) == ("not_started", None, "location_mismatch", "fail")
+    assert line["model_stage_sec"] is None and line["fallback_attempted"] is False
+    assert "verify_answered_by" not in tags
+
+
+async def test_log_for_unreadable_photo(full_fallback, caplog, monkeypatch):
+    async def fake_fetch(image_url):
+        return b"not an image"
+
+    monkeypatch.setattr(pipeline_verify, "fetch_image", fake_fetch)
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(HTTPException):
+        await pipeline_verify.verify_photo(_verify_request(None))
+    [line] = _verify_logs(caplog)
+    assert (line["route"], line["final_status"], line["outcome"]) == ("not_started", 422, "error")
+
+
+async def test_log_for_cancelled_request(full_fallback, caplog):
+    import asyncio
+
+    async def hang():
+        await asyncio.sleep(5)
+
+    full_fallback.set_self(hang)
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        task = asyncio.create_task(pipeline_verify.verify_photo(_verify_request(None)))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    [line] = _verify_logs(caplog)
+    assert (line["outcome"], line["final_status"], line["answered_by"]) == ("cancelled", None, None)
+
+
+async def test_log_has_no_secrets_and_each_request_starts_fresh(full_fallback, caplog):
+    full_fallback.set_self(HTTPException(status_code=504))
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        await pipeline_verify.verify_photo(_verify_request(None))
+        full_fallback.set_self(VLM_RESULT)
+        await pipeline_verify.verify_photo(_verify_request(None))
+    first, second = _verify_logs(caplog)
+    assert first["fallback_attempted"] is True
+    assert (second["fallback_attempted"], second["self_error_status"], second["answered_by"]) == (False, None, "self")
+    text = caplog.text
+    assert IMAGE_URL not in text and "my-bucket" not in text

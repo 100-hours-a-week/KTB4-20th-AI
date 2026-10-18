@@ -1,5 +1,6 @@
 import asyncio
 import io
+import json
 import logging
 import math
 from dataclasses import dataclass, field
@@ -44,6 +45,9 @@ MAX_IMAGE_PIXELS = 2 * Image.MAX_IMAGE_PIXELS
 _IMAGE_ERRORS = (OSError, SyntaxError, ValueError)
 
 logger = logging.getLogger(__name__)
+# 요청별 판정 기록 한 줄. uvicorn 기본 설정은 uvicorn.* 로거만 출력해서 이 모듈 로거의 INFO는 서버 로그에 안 나온다
+# 시작 로그(main.py)처럼 uvicorn.error 로거로 남긴다
+verify_log = logging.getLogger("uvicorn.error")
 
 # 2단계 평가셋(경주 4곳 400건, 사람이 매긴 정답 200장)으로 gemini-3.1-pro-preview 기준 확정.
 # 점수 분포는 모델마다 달라서 모델을 바꾸면 다시 측정해야 한다. 자체 모델은 SELF_* 설정값을 쓴다
@@ -415,6 +419,26 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
     # 오케스트레이터 - 판단하지 않고 1~7단계를 순서대로 호출만 한다
     # 모델을 부르기 전에 끝나는 요청(위치 반려·사진 다운로드 실패)도 Sentry에서 백엔드별로 볼 수 있게 맨 앞에서 붙인다
     sentry_sdk.set_tag("verify_backend", settings.verify_backend)
+    trace = VerifyTrace()
+    response: VerifyResponse | None = None
+    final_status, outcome = 500, "error"
+    try:
+        response = await _verify(request, trace)
+        final_status, outcome = 200, "ok"
+        return response
+    except HTTPException as e:
+        final_status = e.status_code
+        raise
+    except asyncio.CancelledError:
+        outcome = "cancelled"  # 응답을 보내지 않았으니 상태 코드를 지어내지 않는다
+        raise
+    finally:
+        if trace.answered_by is not None:
+            sentry_sdk.set_tag("verify_answered_by", trace.answered_by)
+        verify_log.info("verify %s", json.dumps(_log_fields(trace, response, final_status, outcome), ensure_ascii=False))
+
+
+async def _verify(request: VerifyRequest, trace: VerifyTrace) -> VerifyResponse:
     assert_allowed_source(request.image_url)  # 1
     # 좌표가 없으면 위치로는 판정할 수 없으므로 사진 판정(VLM)으로 넘긴다
     if request.photo_coordinates is not None and is_clear_mismatch(  # 2
@@ -424,7 +448,7 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
 
     image_bytes = await fetch_image(request.image_url)  # 3
     processed = prepare_image(image_bytes)  # 4
-    scored = await score_photo(processed, request.place_name, request.mission_description)  # 5
+    scored = await score_photo(processed, request.place_name, request.mission_description, trace)  # 5
     vlm = scored.vlm
     if isinstance(vlm, QuestionAnswer):  # 설정이 아니라 실제로 받은 답의 형식으로 고른다
         return question_response(vlm)  # 6·7
@@ -437,3 +461,30 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
         raw_landmark_confidence=vlm.landmark_confidence,
         raw_retry_hint=vlm.retry_hint,
     )
+
+
+def _log_fields(trace: VerifyTrace, response: VerifyResponse | None, final_status: int, outcome: str) -> dict:
+    # 폴백률·원인을 나중에 셀 수 있게 요청마다 같은 칸으로 남긴다. 사진·주소·키·에러 원문은 넣지 않는다
+    # route: not_started(위치 반려·사진 처리에서 끝남) / self / off_hours(운영 시간 밖, 폴백 아님) / gemini_backend
+    return {
+        "configured_backend": settings.verify_backend,
+        "vlm_format": settings.vlm_format,
+        "route": trace.route,
+        "answered_by": trace.answered_by,
+        "result": response.result if response else None,
+        "reason": response.reason if response else None,
+        "fallback_enabled": trace.fallback_enabled,
+        "fallback_attempted": trace.fallback_attempted,
+        "fallback_succeeded": trace.fallback_succeeded,
+        "fallback_skip_reason": trace.fallback_skip_reason,
+        "self_error_status": trace.self_error_status,
+        "self_upstream_status": trace.self_call.get("upstream_status"),
+        "self_last_error": trace.self_call.get("last_error"),
+        "self_attempts": trace.self_call.get("attempts"),
+        "budget_sec": trace.budget_sec,
+        "self_sec": trace.self_sec,
+        "gemini_sec": trace.gemini_sec,
+        "model_stage_sec": trace.model_stage_sec,
+        "final_status": final_status if outcome != "cancelled" else None,
+        "outcome": outcome,
+    }
