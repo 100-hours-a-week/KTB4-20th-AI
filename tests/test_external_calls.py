@@ -15,6 +15,7 @@ from app.photomissions import (
     pipeline_verify,
     vlm_client,
 )
+from app.photomissions.pipeline_verify import ScoreResult
 from app.photomissions.schemas import (
     Coordinates,
     DisplayName,
@@ -109,9 +110,9 @@ async def test_score_photo_schema_mismatch_after_retry_maps_to_502(monkeypatch):
     assert exc.value.status_code == 502
 
 
-async def test_score_photo_returns_vlm_result(monkeypatch):
+async def test_score_photo_returns_result_answered_by_gemini(monkeypatch):
     monkeypatch.setattr(pipeline_verify, "generate_structured", _returning(VLM_RESULT))
-    assert await _score() == VLM_RESULT
+    assert await _score() == ScoreResult(VLM_RESULT, "gemini")
 
 
 # VERIFY_BACKEND 분기 — 설정이 정한 모델만 불리고, 미션 생성은 항상 Gemini다
@@ -119,10 +120,10 @@ async def test_score_photo_returns_vlm_result(monkeypatch):
 async def test_gemini_backend_does_not_call_self_model(monkeypatch):
     monkeypatch.setattr(pipeline_verify, "generate_structured", _returning(VLM_RESULT))
     monkeypatch.setattr(vlm_client, "score", _raising(AssertionError("자체 모델을 부르면 안 됨")))
-    assert await _score() == VLM_RESULT
+    assert await _score() == ScoreResult(VLM_RESULT, "gemini")
 
 
-async def test_self_backend_does_not_call_gemini(monkeypatch):
+async def test_self_backend_success_does_not_call_gemini(monkeypatch):
     monkeypatch.setattr(settings, "verify_backend", "self")
     monkeypatch.setattr(pipeline_verify, "generate_structured", _raising(AssertionError("Gemini를 부르면 안 됨")))
 
@@ -131,7 +132,20 @@ async def test_self_backend_does_not_call_gemini(monkeypatch):
         return VLM_RESULT
 
     monkeypatch.setattr(vlm_client, "score", fake_score)
-    assert await _score() == VLM_RESULT
+    assert await _score() == ScoreResult(VLM_RESULT, "self")
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+async def test_self_backend_error_is_returned_as_is(monkeypatch, status):
+    # 이 단계에서는 폴백하지 않는다. 자체 모델 에러가 헤더까지 그대로 나가고 Gemini는 불리지 않는다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(pipeline_verify, "generate_structured", _raising(AssertionError("Gemini를 부르면 안 됨")))
+    error = HTTPException(status_code=status, headers={"Retry-After": "7"} if status == 429 else None)
+    monkeypatch.setattr(vlm_client, "score", _raising(error))
+    with pytest.raises(HTTPException) as exc:
+        await _score()
+    assert exc.value is error
+    assert exc.value.headers == error.headers
 
 
 async def test_generate_uses_gemini_even_when_verify_backend_is_self(monkeypatch):
@@ -430,7 +444,7 @@ def fake_verify_steps(monkeypatch):
 
     async def fake_score(image_bytes, place_name, mission_description):
         calls["score_photo"] += 1
-        return VLM_RESULT
+        return ScoreResult(VLM_RESULT, "gemini")
 
     monkeypatch.setattr(pipeline_verify, "fetch_image", fake_fetch)
     monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
@@ -442,6 +456,18 @@ async def test_far_photo_rejected_before_download_and_vlm(fake_verify_steps):
     res = await pipeline_verify.verify_photo(_verify_request(seoul))
     assert res.result == "fail"
     assert res.reason == "location_mismatch"
+    assert fake_verify_steps == {"fetch_image": 0, "score_photo": 0}
+
+
+async def test_far_photo_is_fail_even_with_zero_self_thresholds(fake_verify_steps, monkeypatch):
+    # 예전에는 0점을 등급 기준에 넣어서, self 재시도 기준이 0이면 위치 반려가 재시도가 됐다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "self_success_threshold", 0.0)
+    monkeypatch.setattr(settings, "self_retry_threshold", 0.0)
+    monkeypatch.setattr(settings, "self_landmark_threshold", 0.0)
+    seoul = Coordinates(latitude=37.5665, longitude=126.9780)
+    res = await pipeline_verify.verify_photo(_verify_request(seoul))
+    assert (res.result, res.reason, res.match_score) == ("fail", "location_mismatch", 0)
     assert fake_verify_steps == {"fetch_image": 0, "score_photo": 0}
 
 
@@ -467,6 +493,29 @@ async def test_missing_photo_coordinates_goes_to_vlm(fake_verify_steps):
     assert fake_verify_steps == {"fetch_image": 1, "score_photo": 1}
 
 
+@pytest.mark.parametrize(
+    ("answered_by", "expected"),
+    [("self", ("success", 55, None)), ("gemini", ("retry", None, "정면에서 다시 찍어보세요"))],
+)
+async def test_verify_grades_with_the_answering_models_thresholds(fake_verify_steps, monkeypatch, answered_by, expected):
+    # 설정이 self여도 등급·랜드마크 노출·안내 문구는 실제로 답한 모델의 기준을 따른다
+    # 85점·랜드마크 55: self 기준(70/30/50)이면 성공·표시·안내 숨김, Gemini 기준(90/40/60)이면 재시도·숨김·안내 표시
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "self_success_threshold", 70.0)
+    monkeypatch.setattr(settings, "self_retry_threshold", 30.0)
+    monkeypatch.setattr(settings, "self_landmark_threshold", 50.0)
+
+    vlm = VlmResult(detected_labels=[], landmark_confidence=55, match_score=85, retry_hint="정면에서 다시 찍어보세요")
+
+    async def fake_score(image_bytes, place_name, mission_description):
+        return ScoreResult(vlm, answered_by)
+
+    monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
+    res = await pipeline_verify.verify_photo(_verify_request(None))
+    assert (res.result, res.landmark_confidence, res.retry_hint) == expected
+    assert res.match_score == 85
+
+
 async def test_unreadable_photo_is_422_without_calling_vlm(fake_verify_steps, monkeypatch):
     async def fake_fetch(image_url):
         fake_verify_steps["fetch_image"] += 1
@@ -485,7 +534,7 @@ async def test_vlm_gets_the_same_bytes_as_normalize_image(fake_verify_steps, mon
 
     async def fake_score(image_bytes, place_name, mission_description):
         seen["bytes"] = image_bytes
-        return VLM_RESULT
+        return ScoreResult(VLM_RESULT, "gemini")
 
     monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
     raw = await pipeline_verify.fetch_image(IMAGE_URL)

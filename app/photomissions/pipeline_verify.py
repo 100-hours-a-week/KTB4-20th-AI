@@ -55,10 +55,18 @@ class Thresholds(NamedTuple):
 
 GEMINI_THRESHOLDS = Thresholds(SUCCESS_THRESHOLD, RETRY_THRESHOLD, LANDMARK_THRESHOLD)
 
+type AnsweredBy = Literal["self", "gemini"]
 
-def current_thresholds() -> Thresholds:
-    # 판정 백엔드에 맞는 기준. self 값이 있고 범위가 맞는지는 앱 시작 때 vlm_client.check_settings가 확인한다
-    if settings.verify_backend == "self":
+
+class ScoreResult(NamedTuple):
+    # 판정 결과와 그 판정을 실제로 낸 모델. 점수 분포가 모델마다 달라 등급 기준을 고를 때 쓴다
+    vlm: VlmResult
+    answered_by: AnsweredBy
+
+
+def thresholds_for(answered_by: AnsweredBy) -> Thresholds:
+    # 설정(VERIFY_BACKEND)이 아니라 답한 모델의 기준. self 값이 있고 범위가 맞는지는 앱 시작 때 vlm_client.check_settings가 확인한다
+    if answered_by == "self":
         return Thresholds(
             cast(float, settings.self_success_threshold),
             cast(float, settings.self_retry_threshold),
@@ -178,12 +186,16 @@ def prepare_image(image_bytes: bytes) -> bytes:
 
 async def score_photo(
     image_bytes: bytes, place_name: str, mission_description: str
-) -> VlmResult:
+) -> ScoreResult:
     # 5. 사진 판정 - 이미지+장소명+미션 내용을 VLM한테 주고 관찰→인식→판단→조언을 한 번에 받음
     # VERIFY_BACKEND가 판정 모델을 정한다. 자체 모델의 시간 제한·에러 처리는 vlm_client가 맡는다
     if settings.verify_backend == "self":
-        return await vlm_client.score(image_bytes, place_name, mission_description)
+        return ScoreResult(await vlm_client.score(image_bytes, place_name, mission_description), "self")
+    return ScoreResult(await _score_with_gemini(image_bytes, place_name, mission_description), "gemini")
 
+
+async def _score_with_gemini(image_bytes: bytes, place_name: str, mission_description: str) -> VlmResult:
+    # Gemini 판정과 에러 → HTTP 상태 변환
     # TODO: Retry-After 값(30초)은 baseline 측정 후 확정
     user_prompt = f"목표 장소: {place_name}\n미션 내용: {mission_description}"
     image_part = types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
@@ -216,9 +228,8 @@ async def score_photo(
         ) from e
 
 
-def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:
-    # 6. 등급 변환 - match_score 구간으로 success/retry/fail 판정
-    thresholds = current_thresholds()
+def to_grade(match_score: float, thresholds: Thresholds) -> Literal["success", "retry", "fail"]:
+    # 6. 등급 변환 - match_score 구간으로 success/retry/fail 판정. 기준은 답한 모델의 것을 받는다
     if match_score >= thresholds.success:
         return "success"
     if match_score >= thresholds.retry:
@@ -226,25 +237,38 @@ def to_grade(match_score: float) -> Literal["success", "retry", "fail"]:
     return "fail"
 
 
+def location_mismatch_response() -> VerifyResponse:
+    # 2번에서 끝난 사전 판정이라 모델 점수·기준을 거치지 않고 항상 실패다
+    # 0점을 등급 기준에 넣으면 self 기준이 0일 때 재시도나 성공이 된다(SELF_*_THRESHOLD는 0을 허용한다)
+    return VerifyResponse(
+        result="fail",
+        reason="location_mismatch",
+        match_score=0,
+        detected_labels=[],
+        landmark_confidence=None,
+        retry_hint=None,
+    )
+
+
 def build_response(
     match_score: float,
+    thresholds: Thresholds,
     detected_labels: list[DetectedLabel] | None = None,
     raw_landmark_confidence: float | None = None,
     raw_retry_hint: str | None = None,
-    reason: Literal["location_mismatch"] | None = None,
 ) -> VerifyResponse:
     # 7. 응답 조립 - landmark_confidence·retry_hint의 노출 여부를 임계값·등급으로 정한다. 문구는 안 붙임
     # 등급은 점수로만 정해지므로 받지 않고 여기서 6번을 호출한다. 점수와 어긋난 등급이 응답에 들어갈 수 없다
-    result = to_grade(match_score)
+    result = to_grade(match_score, thresholds)
     landmark_confidence = (
         raw_landmark_confidence
-        if raw_landmark_confidence is not None and raw_landmark_confidence >= current_thresholds().landmark
+        if raw_landmark_confidence is not None and raw_landmark_confidence >= thresholds.landmark
         else None
     )
     retry_hint = raw_retry_hint if result == "retry" else None
     return VerifyResponse(
         result=result,
-        reason=reason,
+        reason=None,
         match_score=match_score,
         detected_labels=detected_labels or [],
         landmark_confidence=landmark_confidence,
@@ -261,15 +285,17 @@ async def verify_photo(request: VerifyRequest) -> VerifyResponse:
     if request.photo_coordinates is not None and is_clear_mismatch(  # 2
         request.photo_coordinates, request.place_coordinates
     ):
-        return build_response(match_score=0, reason="location_mismatch")  # 6번에서 fail이 된다
+        return location_mismatch_response()
 
     image_bytes = await fetch_image(request.image_url)  # 3
     processed = prepare_image(image_bytes)  # 4
-    vlm = await score_photo(processed, request.place_name, request.mission_description)  # 5
+    scored = await score_photo(processed, request.place_name, request.mission_description)  # 5
+    vlm = scored.vlm
 
-    # VLM 원값을 그대로 7번에 넘긴다. 등급(6번)과 노출 여부는 build_response가 정한다.
+    # VLM 원값을 그대로 7번에 넘긴다. 등급(6번)과 노출 여부는 build_response가 답한 모델의 기준으로 정한다.
     return build_response(  # 6·7
         vlm.match_score,
+        thresholds_for(scored.answered_by),
         vlm.detected_labels,
         raw_landmark_confidence=vlm.landmark_confidence,
         raw_retry_hint=vlm.retry_hint,
