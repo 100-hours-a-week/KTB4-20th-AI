@@ -322,17 +322,26 @@ def _can_retry(remaining: float) -> bool:
     return remaining > 0 and remaining > CONNECT_TIMEOUT
 
 
-async def score(image_bytes: bytes, place_name: str, mission_description: str) -> VlmResult | QuestionAnswer:
+async def score(
+    image_bytes: bytes, place_name: str, mission_description: str,
+    *, deadline: float | None = None, trace: dict | None = None,
+) -> VlmResult | QuestionAnswer:
     # 재시도까지 합쳐 VLM_DEADLINE_SECONDS 안에 끝낸다. 마감은 여기 들어온 순간부터 잰다 (사진 받기·줄이기 제외)
     # VLM_FORMAT에 따라 점수(VlmResult) 또는 객관식 답(QuestionAnswer)을 돌려준다. 등급은 pipeline_verify가 정한다
+    # deadline: 폴백을 쓰는 쪽이 정한 절대 마감(이벤트 루프 시계, loop.time() 기준). 설정 마감과 더 이른 쪽을 쓴다
+    # trace: 요청마다 새로 만든 dict를 넘기면 시도 횟수·마지막 상대 상태·원인·걸린 시간을 거기에 남긴다(성공·실패·취소 모두)
     client, s = get_client()
     payload = build_payload(s.vlm_model, image_bytes, place_name, mission_description, s.vlm_format)
     schema = FORMATS[s.vlm_format][1]
     loop = asyncio.get_running_loop()
     started = loop.time()  # 시스템 시계가 바뀌어도 흔들리지 않는 시계
-    deadline = started + float(s.vlm_deadline_seconds or 0)
-    trace: dict = {"attempts": 0, "upstream_status": None, "last_error": None}
+    own_deadline = started + float(s.vlm_deadline_seconds or 0)
+    deadline = own_deadline if deadline is None else min(own_deadline, deadline)
+    trace = {} if trace is None else trace
+    trace.update(attempts=0, upstream_status=None, last_error=None)
     try:
+        if deadline - started <= 0:  # 부르는 쪽 마감이 이미 지났으면 요청을 시작하지 않는다
+            raise TimeoutError
         # 마감(deadline)은 한 번만 정하고 재시도 때 다시 계산하지 않는다. 바깥 안전망만 DEADLINE_GUARD만큼 늦다
         async with asyncio.timeout_at(deadline + DEADLINE_GUARD):
             while True:
@@ -348,4 +357,5 @@ async def score(image_bytes: bytes, place_name: str, mission_description: str) -
         ) from e
     finally:
         # 키·사진·서버 주소는 남기지 않는다
-        sentry_sdk.set_context("vlm", {**trace, "elapsed_sec": round(loop.time() - started, 3)})
+        trace["elapsed_sec"] = round(loop.time() - started, 3)
+        sentry_sdk.set_context("vlm", dict(trace))

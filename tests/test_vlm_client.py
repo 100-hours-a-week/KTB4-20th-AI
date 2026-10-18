@@ -526,6 +526,69 @@ async def test_lifespan_logs_deadline_warning(monkeypatch, caplog):
     assert "VLM_DEADLINE_SECONDS=25초" in caplog.text
 
 
+# 5-2. 부르는 쪽 마감(deadline)·요청별 기록(trace) — 폴백이 Gemini 몫을 남기려고 쓴다
+
+def _now() -> float:
+    import asyncio
+
+    return asyncio.get_running_loop().time()
+
+
+async def test_earlier_caller_deadline_shortens_the_wait(fake_vlm):
+    server = fake_vlm(slow(5, ok))  # 설정 마감은 60초
+    started = _now()
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=started + 0.3)
+    assert exc.value.status_code == 504
+    assert _now() - started < 2
+    assert len(server.requests) == 1
+
+
+async def test_later_caller_deadline_does_not_extend_the_setting(fake_vlm):
+    fake_vlm(slow(5, ok), vlm_deadline_seconds=0.3)
+    started = _now()
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=started + 60)
+    assert exc.value.status_code == 504
+    assert _now() - started < 2
+
+
+async def test_passed_caller_deadline_sends_nothing(fake_vlm):
+    server = fake_vlm(ok)
+    trace: dict = {}
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=_now() - 1, trace=trace)
+    assert exc.value.status_code == 504
+    assert server.requests == []
+    assert trace["attempts"] == 0
+
+
+async def test_trace_is_filled_per_call_and_does_not_leak(fake_vlm):
+    fake_vlm(status_(500), raise_(httpx.ConnectError), ok)
+    first: dict = {}
+    with pytest.raises(HTTPException):
+        await vlm_client.score(b"jpeg", PLACE, MISSION, trace=first)
+    assert (first["attempts"], first["upstream_status"], first["last_error"]) == (2, None, "ConnectError")
+    assert first["elapsed_sec"] >= 0
+    second: dict = {"attempts": 9, "last_error": "old"}  # 넘긴 dict의 예전 값은 지운다
+    assert await vlm_client.score(b"jpeg", PLACE, MISSION, trace=second) == VLM_RESULT
+    assert (second["attempts"], second["upstream_status"], second["last_error"]) == (1, 200, None)
+    assert "test-key" not in str(first) + str(second) and "vlm.example.com" not in str(first) + str(second)
+
+
+async def test_trace_records_time_even_when_cancelled(fake_vlm):
+    import asyncio
+
+    fake_vlm(slow(5, ok))
+    trace: dict = {}
+    task = asyncio.create_task(vlm_client.score(b"jpeg", PLACE, MISSION, trace=trace))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):  # 취소는 504 등으로 바꾸지 않고 그대로 올라간다
+        await task
+    assert trace["attempts"] == 1 and trace["elapsed_sec"] >= 0
+
+
 async def test_score_without_start_raises():
     # 시작 단계를 거치지 않았으면 몰래 클라이언트를 만들지 않는다
     with pytest.raises(RuntimeError):
