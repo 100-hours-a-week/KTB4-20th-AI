@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     vlm_deadline_seconds: float | None = None  # 판정 한 번에 자체 모델을 기다리는 전체 시간(재시도 포함)
     # 자체 모델 답 형식. score = 점수(0~100) + 아래 기준, question = 객관식 4문항 + 등급 규칙(question_format.rule_grade)
     vlm_format: Literal["score", "question"] = "score"
+    # 자체 모델이 실패하거나 운영 시간 밖일 때 Gemini로 판정한다. 이 값(자체 모델 + Gemini를 합친 모델 판정 단계의
+    # 전체 상한, 초)을 설정해야 폴백이 켜진다. 비우면 자체 모델 결과·에러를 그대로 돌려준다
+    verify_model_budget_seconds: float | None = None
+    # 자체 모델 운영 시간(한국 시간 HH:MM-HH:MM, 시작 포함·끝 제외). 밖이면 자체 모델을 부르지 않고 Gemini로 판정한다.
+    # 비우면 항상 자체 모델을 먼저 부른다. 설정하면 위 예산도 필요하다. Pod를 켜고 끄는 일은 하지 않는다
+    vlm_serving_hours: str = ""
     # 자체 모델용 판정 기준(score 형식만). Gemini 기준(pipeline_verify의 상수)을 조용히 쓰지 않도록 따로 받는다
     self_success_threshold: float | None = None
     self_retry_threshold: float | None = None

@@ -102,8 +102,88 @@ async def test_gemini_backend_starts_without_vlm_settings(monkeypatch, caplog):
 
 def test_self_backend_summary_shows_model_and_thresholds_without_secrets():
     summary = vlm_client.backend_summary(_settings(vlm_api_key="secret-key"))
-    assert summary == "verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 점수, 기준 성공 80 / 재시도 40 / 랜드마크 50)"
+    assert summary == "verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 점수, 기준 성공 80 / 재시도 40 / 랜드마크 50) · 폴백 없음"
     assert "secret-key" not in summary and "vlm.example.com" not in summary
+
+
+# 1-2. 폴백·운영 시간 설정
+
+FALLBACK = {"verify_model_budget_seconds": 20, "gemini_api_key": "gemini-key"}
+
+
+def test_fallback_settings_pass():
+    assert vlm_client.settings_errors(_settings(**FALLBACK)) == []
+    assert vlm_client.settings_errors(_settings(**FALLBACK, vlm_serving_hours="09:00-17:00")) == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"vlm_serving_hours": "09:00-17:00"},  # 운영 시간만 있고 예산 없음
+        {**FALLBACK, "gemini_api_key": ""},  # 폴백할 Gemini 키 없음
+        {**FALLBACK, "gemini_api_key": "  "},
+        {**FALLBACK, "verify_model_budget_seconds": 0},
+        {**FALLBACK, "verify_model_budget_seconds": float("inf")},
+        {**FALLBACK, "verify_model_budget_seconds": float("nan")},
+        {**FALLBACK, "verify_model_budget_seconds": 15},  # Gemini 몫 10초 + 여유를 빼면 자체 모델이 연결도 못 함
+        {**FALLBACK, "vlm_serving_hours": "9:00-17:00"},
+        {**FALLBACK, "vlm_serving_hours": "09:00~17:00"},
+        {**FALLBACK, "vlm_serving_hours": "09:00"},
+        {**FALLBACK, "vlm_serving_hours": "25:00-26:00"},
+        {**FALLBACK, "vlm_serving_hours": "09:60-17:00"},
+        {**FALLBACK, "vlm_serving_hours": "17:00-17:00"},
+        {**FALLBACK, "vlm_serving_hours": "22:00-06:00"},  # 자정 넘는 구간은 지원하지 않음
+    ],
+)
+def test_wrong_fallback_settings_are_reported(overrides):
+    assert vlm_client.settings_errors(_settings(**overrides))
+
+
+def test_fallback_checks_also_run_in_question_format():
+    # 객관식은 점수 기준 검사를 건너뛰지만 폴백 검사는 건너뛰면 안 된다
+    no_thresholds = {"self_success_threshold": None, "self_retry_threshold": None, "self_landmark_threshold": None}
+    assert vlm_client.settings_errors(_settings(vlm_format="question", vlm_serving_hours="09:00-17:00", **no_thresholds))
+    assert vlm_client.settings_errors(_settings(vlm_format="question", **no_thresholds, **FALLBACK)) == []
+
+
+def test_budget_at_the_minimum_passes():
+    least = vlm_client.MIN_GEMINI_START_BUDGET_SECONDS + vlm_client.BUDGET_MARGIN_SECONDS + vlm_client.CONNECT_TIMEOUT
+    assert vlm_client.settings_errors(_settings(**{**FALLBACK, "verify_model_budget_seconds": least})) == []
+
+
+@pytest.mark.parametrize(
+    ("clock", "expected"),
+    [("08:59:59", False), ("09:00:00", True), ("16:59:59", True), ("17:00:00", False), ("00:00:00", False)],
+)
+def test_serving_hours_include_start_exclude_end(clock, expected):
+    from datetime import datetime
+
+    from app.core.time import SERVICE_TIMEZONE
+
+    now = datetime.fromisoformat(f"2026-10-20T{clock}").replace(tzinfo=SERVICE_TIMEZONE)
+    assert vlm_client.in_serving_hours(now, vlm_client.parse_serving_hours("09:00-17:00")) is expected
+
+
+def test_empty_serving_hours_means_always():
+    from datetime import datetime
+
+    from app.core.time import SERVICE_TIMEZONE
+
+    assert vlm_client.parse_serving_hours("  ") is None
+    assert vlm_client.in_serving_hours(datetime(2026, 10, 20, 3, 0, tzinfo=SERVICE_TIMEZONE), None) is True
+
+
+def test_summary_shows_fallback_without_secrets():
+    summary = vlm_client.backend_summary(_settings(**FALLBACK, vlm_serving_hours="09:00-17:00"))
+    assert summary.endswith(" · 폴백 Gemini (모델 단계 예산 20초, 자체 모델 운영 시간 09:00-17:00)")
+    assert "gemini-key" not in summary
+
+
+def test_budget_warning_replaces_self_only_warning():
+    # 폴백을 켜면 모델 단계 상한은 예산이라, 경고도 예산 기준이다
+    assert vlm_client.deadline_warning(_settings(**FALLBACK, vlm_deadline_seconds=25)) is None
+    assert "VERIFY_MODEL_BUDGET_SECONDS=25.5초" in vlm_client.deadline_warning(_settings(**{**FALLBACK, "verify_model_budget_seconds": 25.5}))
+    assert vlm_client.deadline_warning(_settings(**{**FALLBACK, "verify_model_budget_seconds": 20})) is None
 
 
 def test_question_format_needs_no_score_thresholds():
