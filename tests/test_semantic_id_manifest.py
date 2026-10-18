@@ -61,3 +61,15 @@ def test_main_rejects_bad_name_and_empty_include(tmp_path, capsys):
     _make(tmp_path)
     assert manifest.main(["--version-dir", str(tmp_path), "--name", "other.json"]) == 1
     assert manifest.main(["--version-dir", str(tmp_path), "--name", "MANIFEST_x.json", "--include", "nothing"]) == 1
+
+
+def test_only_new_skips_files_listed_in_existing_manifests_and_keeps_old_ones_untouched(tmp_path):
+    _make(tmp_path)
+    manifest.main(["--version-dir", str(tmp_path)])
+    first = (tmp_path / "MANIFEST.json").read_text(encoding="utf-8")
+    (tmp_path / "m2" / "late.json").write_text("{}", encoding="utf-8")
+    assert manifest.main(["--version-dir", str(tmp_path), "--name", "MANIFEST_late.json", "--only-new"]) == 0
+    assert (tmp_path / "MANIFEST.json").read_text(encoding="utf-8") == first
+    assert set(json.loads((tmp_path / "MANIFEST_late.json").read_text(encoding="utf-8"))["files"]) == {"m2/late.json"}
+    assert manifest.verify(tmp_path) == []
+    assert manifest.main(["--version-dir", str(tmp_path), "--name", "MANIFEST_none.json", "--only-new"]) == 1  # 새 파일이 없으면 만들지 않는다
