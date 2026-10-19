@@ -16,7 +16,7 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 from app.core import sentry
 from app.core.config import Settings, settings
 from app.main import app, lifespan
-from app.photomissions import vlm_client
+from app.photomissions import pipeline_generate, vlm_client
 from app.photomissions.pipeline_verify import normalize_image
 from app.photomissions.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer
 from app.photomissions.schemas import VlmResult
@@ -86,6 +86,29 @@ async def test_self_backend_with_missing_settings_does_not_start(monkeypatch):
     with pytest.raises(RuntimeError):
         async with lifespan(app):
             pass
+
+
+async def test_startup_failure_still_clears_generate(monkeypatch):
+    # generate 상한을 만든 뒤 self 설정 검사가 실패해도, 만든 것은 비우고 멈춘다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "vlm_base_url", "")
+    with pytest.raises(RuntimeError):
+        async with lifespan(app):
+            pass
+    assert pipeline_generate._call_slots is None
+
+
+async def test_generate_is_cleared_even_if_vlm_close_fails(monkeypatch):
+    monkeypatch.setattr(settings, "verify_backend", "gemini")
+
+    async def broken_close():
+        raise RuntimeError("종료 정리 실패")
+
+    monkeypatch.setattr(vlm_client, "close", broken_close)
+    with pytest.raises(RuntimeError, match="종료 정리 실패"):
+        async with lifespan(app):
+            assert pipeline_generate._call_slots is not None
+    assert pipeline_generate._call_slots is None
 
 
 async def test_gemini_backend_starts_without_vlm_settings(monkeypatch, caplog):
