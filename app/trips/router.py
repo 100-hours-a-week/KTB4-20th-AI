@@ -1,3 +1,4 @@
+import hashlib
 import logging
 
 from fastapi import APIRouter, Depends
@@ -59,7 +60,12 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
             from app.trips.services.model.runtime import get_router
 
             model_plan = build_slot_plan(request.members, model_slot_plan_seed())
-            places, route = select_places_by_model(model_plan, deal_breakers, request.region, request.members, get_router())
+            # 첫 장소 무작위의 시드는 요청 내용에서 만든다(ADR-0007): 같은 요청은 같은 일정, 다른 요청은 다른 일정
+            seed = int(hashlib.sha256(request.model_dump_json().encode("utf-8")).hexdigest()[:15], 16)
+            places, route = select_places_by_model(
+                model_plan, deal_breakers, request.region, request.members, get_router(),
+                first_k=settings.model_first_place_top_k, seed=seed,
+            )
             if len(places) < MIN_PLACES:
                 raise ValueError(f"모델 경로 결과 {len(places)}곳 (< {MIN_PLACES})")
             logger.info("place-selection: model route=%s places=%d", route, len(places))

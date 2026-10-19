@@ -16,7 +16,11 @@ import numpy as np
 import onnxruntime as ort
 import runpod
 
-from app.trips.services.model.generation import BEAM_WIDTH, generate_itinerary
+from app.trips.services.model.generation import (
+    BEAM_WIDTH,
+    MAX_FIRST_K,
+    generate_itinerary,
+)
 
 BUNDLE = Path(os.environ.get("BUNDLE_DIR", "/bundle"))
 # NVIDIA 장치가 보일 때만 CUDA를 요청한다. 장치 없이 요청하면 폴백하지 않고 프로세스가 죽는 것을 확인했다(GPU 없는 컨테이너에서 종료 코드 139)
@@ -36,7 +40,11 @@ def handler(event):
     if not isinstance(header, list) or not isinstance(slots, list) or not 1 <= len(slots) <= 8:
         return {"error": "header와 slots(1~8개)가 필요함"}
     width = min(int(payload.get("width", BEAM_WIDTH)), 20)
-    places = generate_itinerary(header, slots, CODES, next_logprobs, width)
+    first_k = max(1, min(int(payload.get("first_k") or 1), MAX_FIRST_K))
+    seed = payload.get("seed")
+    if seed is not None and not isinstance(seed, int):
+        return {"error": "seed는 정수여야 함"}
+    places = generate_itinerary(header, slots, CODES, next_logprobs, width, first_k, seed)
     return {"places": places, "providers": SESSION.get_providers(), "model": BUNDLE_DATA["version"].get("model_sha256", "")[:12]}
 
 

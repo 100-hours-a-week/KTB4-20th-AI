@@ -15,6 +15,7 @@ tests/trips의 조합 테스트(7,680건: 지역 5 × 회피조건 부분집합 
 import argparse
 import collections
 import copy
+import hashlib
 import json
 import multiprocessing
 import time
@@ -32,6 +33,11 @@ from app.trips.services.slot_plan import build_slot_plan
 
 SURVEYS = json.loads((Path(__file__).resolve().parents[1] / "tests/trips/data/representative_surveys.json").read_text(encoding="utf-8"))
 _router: InferenceRouter | None = None
+FIRST_K = 30  # ADR-0007: 첫 장소를 모델 상위 30곳 중 시드 무작위로 고른 상태에서도 불변식이 지켜져야 한다
+
+
+def hash_seed(case) -> int:
+    return int(hashlib.sha256(repr(case).encode("utf-8")).hexdigest()[:15], 16)
 
 
 def init_worker(model_dir: str) -> None:
@@ -54,7 +60,9 @@ def check(case: tuple[str, tuple[str, ...], int]) -> tuple[tuple, list[str], str
     problems: list[str] = []
     try:
         trace: dict = {}
-        places, route = select_places_by_model(plan, breakers, E_Region(region_value), members, _router, trace=trace)
+        places, route = select_places_by_model(
+            plan, breakers, E_Region(region_value), members, _router, trace=trace, first_k=FIRST_K, seed=hash_seed(case),
+        )
     except Exception as error:  # noqa: BLE001  모델 경로 자체가 실패한 경우도 위반으로 센다
         return case, [f"예외 {type(error).__name__}: {error}"], "error"
     if len(places) not in (5, 6):

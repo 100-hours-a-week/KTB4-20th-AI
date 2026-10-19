@@ -48,11 +48,13 @@ class LocalEngine:
 
         return fn
 
-    def generate(self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH) -> list[str | None]:
+    def generate(
+        self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH, first_k: int = 1, seed: int | None = None,
+    ) -> list[str | None]:
         if not self._slots.acquire(blocking=False):
             raise InferenceUnavailable("CPU 동시 실행 상한 초과")
         try:
-            return generate_itinerary(header, slot_candidates, self.codes, self.next_logprobs(), width)
+            return generate_itinerary(header, slot_candidates, self.codes, self.next_logprobs(), width, first_k, seed)
         finally:
             self._slots.release()
 
@@ -64,8 +66,10 @@ class RunPodEngine:
         self.url, self.api_key, self.timeout = url.rstrip("/"), api_key, timeout_seconds
         self._post = post
 
-    def generate(self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH) -> list[str | None]:
-        payload = {"input": {"header": header, "slots": slot_candidates, "width": width}}
+    def generate(
+        self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH, first_k: int = 1, seed: int | None = None,
+    ) -> list[str | None]:
+        payload = {"input": {"header": header, "slots": slot_candidates, "width": width, "first_k": first_k, "seed": seed}}
         try:
             if self._post is not None:
                 body = self._post(f"{self.url}/runsync", payload, self.timeout)
@@ -117,15 +121,17 @@ class InferenceRouter:
     def __init__(self, gpu: RunPodEngine | None, cpu: LocalEngine | None, breaker: CircuitBreaker | None = None):
         self.gpu, self.cpu, self.breaker = gpu, cpu, breaker or CircuitBreaker()
 
-    def generate(self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH) -> tuple[list[str | None], str]:
+    def generate(
+        self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH, first_k: int = 1, seed: int | None = None,
+    ) -> tuple[list[str | None], str]:
         if self.gpu is not None and self.breaker.allow():
             try:
-                places = self.gpu.generate(header, slot_candidates, width)
+                places = self.gpu.generate(header, slot_candidates, width, first_k, seed)
                 self.breaker.record_success()
                 return places, "gpu"
             except InferenceUnavailable as error:
                 self.breaker.record_failure()
                 logger.warning("GPU 경로 실패, CPU로 폴백: %s", error)
         if self.cpu is not None:
-            return self.cpu.generate(header, slot_candidates, width), "cpu"
+            return self.cpu.generate(header, slot_candidates, width, first_k, seed), "cpu"
         raise InferenceUnavailable("사용 가능한 추론 경로가 없음")
