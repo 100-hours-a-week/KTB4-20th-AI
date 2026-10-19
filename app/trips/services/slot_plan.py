@@ -94,3 +94,39 @@ def build_slot_plan(
         items=tuple(slot_plan_items),
         daytime_category_ranking=tuple(daytime_category_ranking),
     )
+
+# 마지막 날은 점심까지다 (ADR-0008). 당일치기(1일)는 마지막 날 규칙을 적용하지 않고 하루 전체 템플릿을 쓴다
+LAST_DAY_TIME_SLOTS: frozenset[E_Time_Slot] = frozenset({E_Time_Slot.MORNING, E_Time_Slot.LUNCH})
+
+
+@dataclass(frozen=True)
+class Trip_Slot_Plan:
+    days: tuple[Slot_Plan, ...]  # 일자 순서. 마지막 날만 점심까지인 짧은 계획이다
+
+
+def build_trip_slot_plan(
+    members: list[Member_Survey], num_days: int, random_generator: random.Random | None = None, diversity: bool = False,
+) -> Trip_Slot_Plan:
+    """여행 전체 슬롯 구조 (ADR-0008). 카테고리 순위와 저녁 이후 슬롯 여부는 여행 전체에서 한 번만 정하고, 일자 유형만 다르다.
+
+    마지막 날(2일 이상일 때)은 MORNING, LUNCH만 둔다. 저녁 이후 슬롯은 마지막 날을 뺀 날마다 시도한다(후보가 없으면 선택 단계에서 제거).
+    diversity면 오후2(2위 카테고리) 슬롯을 3위, 4위 카테고리로 일자마다 번갈아 바꾼다(첫째 날 3위). 규칙 경로의 다양성 안이다.
+    """
+    if num_days < 1:
+        raise ValueError("num_days는 1 이상이어야 함")
+    base = build_slot_plan(members, random_generator)
+    ranking = base.daytime_category_ranking
+    days: list[Slot_Plan] = []
+    for index in range(num_days):
+        is_last_day = num_days >= 2 and index == num_days - 1
+        items = tuple(
+            item for item in base.items if not is_last_day or item.time_slot in LAST_DAY_TIME_SLOTS
+        )
+        if diversity:
+            extra_category = ranking[2 + index % 2]
+            items = tuple(
+                Slot_Plan_Item(item.time_slot, extra_category) if item.time_slot == E_Time_Slot.AFTERNOON_SECOND else item
+                for item in items
+            )
+        days.append(Slot_Plan(items=items, daytime_category_ranking=ranking))
+    return Trip_Slot_Plan(days=tuple(days))
