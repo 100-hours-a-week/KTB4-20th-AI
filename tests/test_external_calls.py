@@ -1,3 +1,4 @@
+import asyncio
 import io
 from types import SimpleNamespace
 
@@ -360,6 +361,16 @@ async def test_success_on_first_try(fake_gemini):
     assert fake.calls == 1
 
 
+async def test_trace_counts_real_attempts_including_retry(fake_gemini):
+    # generate가 묶음별 실제 시도 횟수를 기록할 때 쓴다. 넘기지 않으면(verify) 동작은 그대로다
+    fake_gemini(_api_error(500), VLM_RESULT)
+    trace = {}
+    result = await gemini_client.generate_structured(
+        system="system", user="user", response_schema=VlmResult, trace=trace,
+    )
+    assert result == VLM_RESULT and trace == {"attempts": 2}
+
+
 async def test_429_is_not_retried(fake_gemini):
     fake = fake_gemini(_api_error(429), VLM_RESULT)
     with pytest.raises(errors.APIError) as exc:
@@ -595,6 +606,7 @@ def _place(place_id: str, name: str) -> MissionPlace:
     )
 
 
+@pytest.mark.usefixtures("generate_started")
 async def test_generate_missions_one_call_matched_by_number(monkeypatch):
     places = [_place("places/A", "첨성대"), _place("places/B", "대릉원"), _place("places/C", "월정교")]
     calls = []
@@ -620,6 +632,7 @@ async def test_generate_missions_one_call_matched_by_number(monkeypatch):
     ]
 
 
+@pytest.mark.usefixtures("generate_started")
 async def test_generate_missions_retries_when_place_missing(fake_gemini):
     # 실제 generate_structured를 거쳐, 장소가 빠진 응답이면 다시 부르는지 확인한다
     places = [_place("places/A", "첨성대"), _place("places/B", "대릉원")]
@@ -638,6 +651,25 @@ async def test_generate_missions_retries_when_place_missing(fake_gemini):
     assert fake.calls == 2
     assert [m.place_id for m in res.missions] == ["places/A", "places/B"]
 
+
+
+@pytest.mark.usefixtures("generate_started")
+async def test_generate_deadline_during_gemini_call_does_not_retry(monkeypatch):
+    # 실제 generate_structured를 거친다. 마감으로 취소되면 재시도 루프가 취소를 삼키지 않아 다음 호출을 시작하지 않는다
+    calls = []
+
+    async def slow(**kwargs):
+        calls.append(kwargs)
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(gemini_client, "_get_client",
+                        lambda: SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=slow))))
+    monkeypatch.setattr(settings, "generate_deadline_seconds", 0.05)
+    request = PhotoMissionGenerateRequest(itinerary_id="it_1", places=[_place("places/A", "첨성대")])
+    with pytest.raises(HTTPException) as exc:
+        await pipeline_generate.generate_missions(request)
+    assert exc.value.status_code == 504
+    assert len(calls) == 1
 
 
 # 6. 폴백 — self에서 자체 모델이 실패하거나 운영 시간 밖이면 Gemini로, 모델 단계 전체 예산 안에서

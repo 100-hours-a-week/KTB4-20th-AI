@@ -28,6 +28,7 @@ async def generate_structured[T: BaseModel](
     user: types.ContentListUnion,
     response_schema: type[T],
     is_valid: Callable[[T], bool] | None = None,
+    trace: dict | None = None,
 ) -> T:
     # 구조화 출력 호출. user는 텍스트 하나 또는 [텍스트, 이미지] 리스트
     # is_valid: 스키마는 맞아도 내용이 요청과 어긋나는지 호출하는 쪽이 검사할 때 넘긴다
@@ -40,6 +41,8 @@ async def generate_structured[T: BaseModel](
     )
     last_error: Exception = ValueError("generate_structured: 알 수 없는 실패")
     for _ in range(MAX_ATTEMPTS):
+        if trace is not None:  # 실제 Gemini 시도 횟수. 기록용일 뿐 재시도 정책에는 쓰지 않는다 (안 넘기면 동작 그대로)
+            trace["attempts"] = trace.get("attempts", 0) + 1
         try:
             response = await _get_client().aio.models.generate_content(
                 model=MODEL_NAME, contents=user, config=config,

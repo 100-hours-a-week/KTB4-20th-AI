@@ -12,6 +12,9 @@ build_train_pilot.py가 뽑은 사진(manifest.jsonl)에 세 가지 방법으로
   uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/pilot --aihub /Volumes/T7/aihub
 
   결과는 pilot-dir/missions.jsonl에 미션 1개당 한 줄로 쌓인다. 다시 실행하면 이미 만든 미션은 건너뛴다.
+
+generate에는 전체 마감(GENERATE_DEADLINE_SECONDS, 기본 25초)이 있어 넘으면 504로 기록된다. 예전 결과는 마감 없이
+기다린 값이므로, Gemini가 느린 시간대에 예전과 같은 조건으로 비교하려면 값을 늘려 실행한다 (예: GENERATE_DEADLINE_SECONDS=120)
 """
 
 import argparse
@@ -25,7 +28,7 @@ from fastapi import HTTPException
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from app.photomissions import gemini_client
+from app.photomissions import gemini_client, pipeline_generate
 from app.photomissions.pipeline_generate import generate_missions
 from app.photomissions.pipeline_verify import normalize_image
 from scripts.build_train_pilot import TRAIN_CATEGORIES
@@ -125,6 +128,7 @@ def _base(row: dict) -> dict:
 
 
 async def main() -> None:
+    pipeline_generate.start()  # 서비스는 lifespan에서 부른다. 스크립트는 앱 없이 generate_missions를 직접 부르므로 여기서
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pilot-dir", type=pathlib.Path, required=True)
     ap.add_argument("--aihub", type=pathlib.Path, required=True)

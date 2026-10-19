@@ -81,7 +81,7 @@ def test_use_prompt_changes_what_generate_sends(monkeypatch):
     monkeypatch.setattr(pipeline_generate, "MISSION_SYSTEM_PROMPT", pipeline_generate.MISSION_SYSTEM_PROMPT)
     sent = []
 
-    async def fake_generate_structured(system, user, response_schema, is_valid=None):
+    async def fake_generate_structured(system, user, response_schema, is_valid=None, trace=None):
         sent.append(system)
         return MissionBatch(missions=[MissionDescription(number=1, description="기와지붕 크게 찍기", scope="GROUP")])
 

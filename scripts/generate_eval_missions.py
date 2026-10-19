@@ -19,6 +19,9 @@ build_eval_category.py가 만든 manifest.jsonl의 방문지로 서비스의 gen
   uv run python -m scripts.generate_eval_missions --manifest /Volumes/T7/aihub/eval_b/manifest.jsonl \\
       --split-file /Volumes/T7/aihub/eval_split.json --split dev --sample-places 80 \\
       --prompt v1 --out /Volumes/T7/aihub/eval_b/prompt_compare/v1_run1.jsonl --dry-run
+
+generate에는 전체 마감(GENERATE_DEADLINE_SECONDS, 기본 25초)이 있어 넘으면 504로 기록된다. 예전 결과는 마감 없이
+기다린 값이므로, Gemini가 느린 시간대에 예전과 같은 조건으로 비교하려면 값을 늘려 실행한다 (예: GENERATE_DEADLINE_SECONDS=120)
 """
 
 import argparse
@@ -167,6 +170,7 @@ def to_request(batch: list[dict], batch_id: str) -> PhotoMissionGenerateRequest:
 
 
 async def main(argv: list[str] | None = None) -> None:
+    pipeline_generate.start()  # 서비스는 lifespan에서 부른다. 스크립트는 앱 없이 generate_missions를 직접 부르므로 여기서
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--manifest", type=pathlib.Path, required=True)
     ap.add_argument("--out", type=pathlib.Path, required=True, help="결과 JSONL 경로 (레포 밖에 둘 것)")
