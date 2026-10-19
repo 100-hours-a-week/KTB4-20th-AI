@@ -254,3 +254,115 @@ def test_selection_passes_first_k_and_seed_to_the_router(monkeypatch):
     plan = build_slot_plan(members, selection.model_slot_plan_seed())
     selection.select_places_by_model(plan, [], E_Region.SEOUL, members, FakeRouter(), first_k=30, seed=12345)
     assert seen == {"first_k": 30, "seed": 12345}
+
+
+def test_generate_trip_shares_used_places_across_days_and_restarts_the_context_each_day():
+    header = generation.preference_header(["HISTORY_CULTURE", "ACTIVITY"], "서울")
+    seen = []
+    prefer_a = _prefer("A")
+
+    def fn(prefixes):
+        seen.extend(len(p) for p in prefixes)
+        return prefer_a(prefixes)
+
+    out = generation.generate_trip(header, [[["A", "B"]], [["A", "B"]]], CODES, fn)
+    assert out == [["A"], ["B"]]  # 첫날 A를 썼으면 둘째 날은 A가 후보에서 빠진다
+    assert seen.count(len(header)) == 2  # 일자마다 앞 일자의 장소 없이 헤더만으로 시작한다
+
+
+def test_generate_trip_derives_the_first_place_seed_per_day():
+    codes = _ranked_codes(8)
+    fn = _prefer_small_c1(8)
+    header = generation.preference_header(["HISTORY_CULTURE", "ACTIVITY"], "서울")
+    days = [[list(codes)], [list(codes)], [list(codes)]]
+    trip = generation.generate_trip(header, days, codes, fn, first_k=3, seed=10)
+    used: set[str] = set()
+    expected = [
+        generation.generate_itinerary(header, day, codes, fn, first_k=3, seed=10 + index, used=used)
+        for index, day in enumerate(days)
+    ]
+    assert trip == expected
+    assert len({place for day in trip for place in day}) == 3  # 여행 전체에서 중복 없음
+    assert trip == generation.generate_trip(header, days, codes, fn, first_k=3, seed=10)  # 같은 시드는 같은 결과
+
+
+def test_resolve_days_turns_pool_names_into_candidates_and_rejects_bad_input():
+    pools = {"daytime": ["A", "B"], "food": ["C"]}
+    assert generation.resolve_days(pools, [["daytime", "food"], ["food"]]) == [[["A", "B"], ["C"]], [["C"]]]
+    bad_inputs = [
+        (None, [["daytime"]]),  # pools가 없음
+        ({"daytime": "A"}, [["daytime"]]),  # 풀이 목록이 아님
+        (pools, []),  # 일수 0
+        (pools, [["daytime"]] * (generation.MAX_TRIP_DAYS + 1)),  # 일수 초과
+        (pools, [[]]),  # 슬롯 0
+        (pools, [["daytime"] * (generation.MAX_DAY_SLOTS + 1)]),  # 하루 슬롯 초과
+        (pools, [["unknown"]]),  # 없는 풀 이름
+        (pools, [[1]]),  # 풀 이름이 문자열이 아님
+    ]
+    for bad_pools, bad_days in bad_inputs:
+        with pytest.raises(ValueError):
+            generation.resolve_days(bad_pools, bad_days)
+    assert len(generation.resolve_days(pools, [["daytime"]] * generation.MAX_TRIP_DAYS)) == generation.MAX_TRIP_DAYS
+
+
+def test_run_trip_request_returns_days_or_an_error_without_raising():
+    header = generation.preference_header(["HISTORY_CULTURE", "ACTIVITY"], "서울")
+    payload = {"header": header, "pools": {"all": ["A", "B", "C"]}, "days": [["all", "all"], ["all"]], "width": 10}
+    assert generation.run_trip_request(payload, CODES, _prefer("A")) == {"days": [["A", "B"], ["C"]]}
+    for broken in (
+        {**payload, "header": None},
+        {**payload, "days": [["missing"]]},
+        {**payload, "seed": "1"},
+    ):
+        assert "error" in generation.run_trip_request(broken, CODES, _prefer("A"))
+
+
+def test_runpod_engine_generate_trip_sends_pools_once_and_validates_the_shape():
+    sent = []
+
+    def post(url, payload, timeout):
+        sent.append(payload)
+        return {"status": "COMPLETED", "output": {"days": [["A", None], ["B"]]}}
+
+    engine = RunPodEngine("http://x", "", 1.0, post=post)
+    pools, days = {"all": ["A", "B"]}, [["all", "all"], ["all"]]
+    assert engine.generate_trip([1], pools, days, first_k=30, seed=5) == [["A", None], ["B"]]
+    assert sent[0]["input"] == {"header": [1], "pools": pools, "days": days, "width": 10, "first_k": 30, "seed": 5}
+    for bad_output in ({"days": [["A", None]]}, {"days": [["A"], ["B"]]}, {"error": "x"}, {}):
+        broken = RunPodEngine("http://x", "", 1.0, post=lambda *a, out=bad_output: {"status": "COMPLETED", "output": out})
+        with pytest.raises(InferenceUnavailable):
+            broken.generate_trip([1], pools, days)  # 일수·일자별 슬롯 수가 다르거나 이전 이미지가 보낸 오류 응답
+
+
+def test_local_engine_generate_trip_uses_the_shared_generation_and_the_concurrency_limit():
+    import threading
+
+    engine = LocalEngine.__new__(LocalEngine)
+    engine._slots = threading.BoundedSemaphore(1)
+    engine.codes = CODES
+    engine.next_logprobs = lambda: _prefer("A")
+    assert engine.generate_trip([1], {"all": ["A", "B"]}, [["all"], ["all"]]) == [["A"], ["B"]]
+    engine._slots.acquire()
+    with pytest.raises(InferenceUnavailable):
+        engine.generate_trip([1], {"all": ["A"]}, [["all"]])
+
+
+def test_router_generate_trip_falls_back_from_gpu_to_cpu_and_counts_failures():
+    class TripGpu:
+        calls = 0
+
+        def generate_trip(self, header, pools, days, width=10, first_k=1, seed=None):
+            TripGpu.calls += 1
+            raise InferenceUnavailable("x")
+
+    class TripCpu:
+        def generate_trip(self, header, pools, days, width=10, first_k=1, seed=None):
+            return [["B"]]
+
+    router = InferenceRouter(TripGpu(), TripCpu(), CircuitBreaker(2, 60.0, clock=lambda: 0.0))
+    assert router.generate_trip([1], {"all": ["B"]}, [["all"]]) == ([["B"]], "cpu")
+    router.generate_trip([1], {"all": ["B"]}, [["all"]])
+    router.generate_trip([1], {"all": ["B"]}, [["all"]])
+    assert TripGpu.calls == 2  # 연속 2번 실패하면 막혀서 더 부르지 않는다
+    with pytest.raises(InferenceUnavailable):
+        InferenceRouter(TripGpu(), None).generate_trip([1], {"all": ["B"]}, [["all"]])

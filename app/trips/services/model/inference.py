@@ -17,6 +17,8 @@ from app.trips.services.model.generation import (
     BEAM_WIDTH,
     NextLogprobs,
     generate_itinerary,
+    generate_trip,
+    resolve_days,
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,17 @@ class LocalEngine:
         finally:
             self._slots.release()
 
+    def generate_trip(
+        self, header: list[int], pools: dict[str, list[str]], days: list[list[str]], width: int = BEAM_WIDTH,
+        first_k: int = 1, seed: int | None = None,
+    ) -> list[list[str | None]]:
+        if not self._slots.acquire(blocking=False):
+            raise InferenceUnavailable("CPU 동시 실행 상한 초과")
+        try:
+            return generate_trip(header, resolve_days(pools, days), self.codes, self.next_logprobs(), width, first_k, seed)
+        finally:
+            self._slots.release()
+
 
 class RunPodEngine:
     """RunPod Serverless 동기 호출(/runsync). 후보 목록과 헤더를 보내고 슬롯별 장소를 받는다."""
@@ -70,6 +83,25 @@ class RunPodEngine:
         self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH, first_k: int = 1, seed: int | None = None,
     ) -> list[str | None]:
         payload = {"input": {"header": header, "slots": slot_candidates, "width": width, "first_k": first_k, "seed": seed}}
+        places = self._run(payload).get("places")
+        if not isinstance(places, list) or len(places) != len(slot_candidates):
+            raise InferenceUnavailable("RunPod 응답 형식 오류")
+        return places
+
+    def generate_trip(
+        self, header: list[int], pools: dict[str, list[str]], days: list[list[str]], width: int = BEAM_WIDTH,
+        first_k: int = 1, seed: int | None = None,
+    ) -> list[list[str | None]]:
+        # 후보 풀은 한 번만 보내고 슬롯은 풀 이름으로 가리킨다(요청 크기가 일수에 비례하지 않게, ADR-0008)
+        payload = {"input": {"header": header, "pools": pools, "days": days, "width": width, "first_k": first_k, "seed": seed}}
+        trip = self._run(payload).get("days")
+        if not isinstance(trip, list) or len(trip) != len(days) or any(
+            not isinstance(day, list) or len(day) != len(slots) for day, slots in zip(trip, days, strict=True)
+        ):
+            raise InferenceUnavailable("RunPod 응답 형식 오류")
+        return trip
+
+    def _run(self, payload: dict) -> dict:
         try:
             if self._post is not None:
                 body = self._post(f"{self.url}/runsync", payload, self.timeout)
@@ -86,10 +118,7 @@ class RunPodEngine:
             raise InferenceUnavailable(f"RunPod 호출 실패: {type(error).__name__}") from error
         if body.get("status") != "COMPLETED":
             raise InferenceUnavailable(f"RunPod 상태: {body.get('status')}")
-        places = (body.get("output") or {}).get("places")
-        if not isinstance(places, list) or len(places) != len(slot_candidates):
-            raise InferenceUnavailable("RunPod 응답 형식 오류")
-        return places
+        return body.get("output") or {}
 
 
 class CircuitBreaker:
@@ -124,14 +153,23 @@ class InferenceRouter:
     def generate(
         self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH, first_k: int = 1, seed: int | None = None,
     ) -> tuple[list[str | None], str]:
+        return self._route(lambda engine: engine.generate(header, slot_candidates, width, first_k, seed))
+
+    def generate_trip(
+        self, header: list[int], pools: dict[str, list[str]], days: list[list[str]], width: int = BEAM_WIDTH,
+        first_k: int = 1, seed: int | None = None,
+    ) -> tuple[list[list[str | None]], str]:
+        return self._route(lambda engine: engine.generate_trip(header, pools, days, width, first_k, seed))
+
+    def _route(self, run: Callable):
         if self.gpu is not None and self.breaker.allow():
             try:
-                places = self.gpu.generate(header, slot_candidates, width, first_k, seed)
+                result = run(self.gpu)
                 self.breaker.record_success()
-                return places, "gpu"
+                return result, "gpu"
             except InferenceUnavailable as error:
                 self.breaker.record_failure()
                 logger.warning("GPU 경로 실패, CPU로 폴백: %s", error)
         if self.cpu is not None:
-            return self.cpu.generate(header, slot_candidates, width, first_k, seed), "cpu"
+            return run(self.cpu), "cpu"
         raise InferenceUnavailable("사용 가능한 추론 경로가 없음")
