@@ -92,18 +92,25 @@ class E_Precheck_Reason_Category(str, Enum):
     CLOSURE_RISK = "closure_risk"
 
 
+class E_Weather_Detail(str, Enum):
+    """날씨 위험 상세 (ADR-0009). 단기 구간은 예보 양, 중기 구간은 강수 확률·문구로 판단하므로 이름이 다르다."""
+    HEAVY_RAIN = "heavy_rain"
+    HEAVY_SNOW = "heavy_snow"
+    RAIN_LIKELY = "rain_likely"
+    SNOW_LIKELY = "snow_likely"
+
+
 class Precheck_Reason(BaseModel):
     category: E_Precheck_Reason_Category
     detail: str
 
-class Precheck_Request(BaseModel):
-    region: E_Region
-
 
 class Precheck_Response_Data(BaseModel):
-    has_issue: bool
-    affected_place_ids: list[str]
-    reasons: list[Precheck_Reason]
+    """precheck 응답. 요청의 external_factors(External_Factors)와 같은 모양이라 BE가 그대로 전달한다.
+    External_Factors를 상속하지 않는 것은 generated_at을 필수로 두면서 부모의 기본값 있는 필드를 덮어쓰면 타입 검사기가 거부하기 때문이다.
+    generated_at은 사용한 예보 중 가장 오래된 것의 수신 시각(UTC)이다."""
+    generated_at: datetime
+    forecasts: list[External_Forecast_Day]
 
 
 # --- trips/course-recommendation ---
