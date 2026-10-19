@@ -40,6 +40,7 @@ class ChunkTrace:
     call_sec: float | None = None  # 재시도를 포함해 Gemini를 부른 시간
     attempts: int = 0  # 실제 Gemini 시도 횟수
     error_status: int | None = None
+    cancelled_while: str | None = None  # 취소됐을 때 waiting(자리 대기 중) / running(호출 중)
 
 
 def start() -> None:
@@ -199,22 +200,31 @@ async def _write_chunks(chunks: list[list[MissionPlace]], traces: list[ChunkTrac
                 failures[index] = e
                 raise
             except asyncio.CancelledError:
-                trace.status = "cancelled"
+                if trace.status == "waiting":  # 자리를 못 얻고 취소됐다. 혼잡 정도를 알 수 있게 기다린 시간을 남긴다
+                    trace.wait_sec = round(time.monotonic() - waiting, 3)
+                trace.status, trace.cancelled_while = "cancelled", trace.status
                 raise
             except Exception:
                 trace.status = "failed"
                 raise
 
+    # TaskGroup은 쓰지 않는다. 3.12의 TaskGroup은 끝나기를 기다리는 중 자식이 실패하면 부모 태스크에 건 취소를
+    # 거두지 않아, 바깥 취소·전체 마감과 묶음 실패가 겹치면 취소가 HTTP 실패로 바뀌거나 마감이 504가 되지 않는다.
+    # 여기서는 부모에 취소를 걸지 않으므로, 부모가 받는 취소는 바깥 취소와 전체 마감뿐이다
+    workers = [asyncio.create_task(worker()) for _ in range(min(MAX_CONCURRENT_CALLS, len(chunks)))]
     try:
-        async with asyncio.TaskGroup() as group:
-            for _ in range(min(MAX_CONCURRENT_CALLS, len(chunks))):
-                group.create_task(worker())
-    except BaseExceptionGroup as failed:
-        # 묶음 실패는 ExceptionGroup으로 묶여 온다. 그대로 두면 500이 되므로 HTTP 실패를 하나 골라 올린다
-        # 프로그램 오류가 하나라도 섞여 있으면 502로 숨기지 않고 그대로 올린다
-        if all(isinstance(e, HTTPException) for e in failed.exceptions):
-            raise pick_failure(failures) from None
-        raise
+        await asyncio.wait(workers, return_when=asyncio.FIRST_EXCEPTION)
+    finally:
+        # 묶음 실패·바깥 취소·마감이면 남은 작업자를 취소하고, 정리가 끝날 때까지 기다린다 (다 끝났으면 아무 일도 없다)
+        for w in workers:
+            w.cancel()
+        await asyncio.wait(workers)
+    errors = [w.exception() for w in workers if not w.cancelled() and w.exception() is not None]
+    if bugs := [e for e in errors if not isinstance(e, HTTPException)]:
+        # 프로그램 오류가 하나라도 있으면 502·429로 숨기지 않고 그대로 올린다
+        raise BaseExceptionGroup("generate 묶음 처리 중 프로그램 오류", bugs)
+    if failures:
+        raise pick_failure(failures)
     return [batch for batch in batches if batch is not None]
 
 

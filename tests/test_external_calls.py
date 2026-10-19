@@ -606,6 +606,7 @@ def _place(place_id: str, name: str) -> MissionPlace:
     )
 
 
+@pytest.mark.usefixtures("generate_started")
 async def test_generate_missions_one_call_matched_by_number(monkeypatch):
     places = [_place("places/A", "첨성대"), _place("places/B", "대릉원"), _place("places/C", "월정교")]
     calls = []
@@ -631,6 +632,7 @@ async def test_generate_missions_one_call_matched_by_number(monkeypatch):
     ]
 
 
+@pytest.mark.usefixtures("generate_started")
 async def test_generate_missions_retries_when_place_missing(fake_gemini):
     # 실제 generate_structured를 거쳐, 장소가 빠진 응답이면 다시 부르는지 확인한다
     places = [_place("places/A", "첨성대"), _place("places/B", "대릉원")]
@@ -651,6 +653,7 @@ async def test_generate_missions_retries_when_place_missing(fake_gemini):
 
 
 
+@pytest.mark.usefixtures("generate_started")
 async def test_generate_deadline_during_gemini_call_does_not_retry(monkeypatch):
     # 실제 generate_structured를 거친다. 마감으로 취소되면 재시도 루프가 취소를 삼키지 않아 다음 호출을 시작하지 않는다
     calls = []
