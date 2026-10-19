@@ -5,10 +5,12 @@ import pytest
 from app.core.config import Settings
 from app.photomissions import pipeline_generate
 from app.photomissions.pipeline_generate import (
+    assemble_missions,
     build_mission,
     covers_every_place,
     new_mission_id,
     pick_primary_category,
+    split_places,
 )
 from app.photomissions.schemas import (
     DisplayName,
@@ -99,3 +101,35 @@ def test_generate_deadline_must_be_positive_finite(deadline):
     assert pipeline_generate.settings_errors(s)
     with pytest.raises(RuntimeError, match="GENERATE_DEADLINE_SECONDS"):
         pipeline_generate.check_settings(s)
+
+
+def _places(n: int) -> list[MissionPlace]:
+    return [
+        MissionPlace(id=f"p{i}", displayName=DisplayName(text=f"장소{i}", languageCode="ko"),
+                     selected_for=[], matched_preferences=[])
+        for i in range(n)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("count", "sizes"),
+    [(1, [1]), (8, [8]), (9, [5, 4]), (15, [8, 7]), (16, [8, 8]), (20, [7, 7, 6])],
+)
+def test_split_places_evenly_within_limit(count, sizes):
+    places = _places(count)
+    chunks = split_places(places)
+    assert [len(c) for c in chunks] == sizes
+    assert [p for c in chunks for p in c] == places  # 순서를 지키고 빠짐·중복 없이 이어 붙는다
+
+
+def test_assemble_restores_request_order_across_chunks():
+    # 묶음마다 번호가 1부터 다시 시작하고, 모델이 번호 순서를 섞어 돌려줘도 요청 순서대로 짝지어야 한다
+    places = _places(5)
+    chunks = [places[:3], places[3:]]
+
+    def batch(*pairs: tuple[int, str]) -> MissionBatch:
+        return MissionBatch(missions=[MissionDescription(number=n, description=d, scope="PERSONAL") for n, d in pairs])
+
+    missions = assemble_missions(chunks, [batch((3, "c"), (1, "a"), (2, "b")), batch((2, "e"), (1, "d"))])
+    assert [(m.place_id, m.description) for m in missions] == [
+        ("p0", "a"), ("p1", "b"), ("p2", "c"), ("p3", "d"), ("p4", "e")]

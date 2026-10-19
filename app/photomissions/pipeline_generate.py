@@ -18,6 +18,8 @@ from app.photomissions.schemas import (
     T_Preference,
 )
 
+MAX_PLACES_PER_CALL = 8  # 10곳 한 번 호출이 최대 19.81초(3번 측정). 여유를 두고 8곳으로 시작한다
+
 
 def settings_errors(s: Settings) -> list[str]:
     # generate 설정 검사. 틀리면 앱이 시작되지 않는다 (verify 백엔드와 상관없이 항상 검사)
@@ -104,14 +106,32 @@ def build_mission(place: MissionPlace, result: MissionDescription) -> Mission:
     )
 
 
+def split_places(places: list[MissionPlace]) -> list[list[MissionPlace]]:
+    # 장소가 많으면 한 번의 호출이 백엔드 타임아웃(30초)을 넘는다(15곳 이상에서 자주 넘음, 2026-10-19 측정)
+    # MAX_PLACES_PER_CALL곳 이하 묶음으로 고르게 나눈다. 순서를 지키고 이어진 장소끼리 묶는다(20곳 → 7+7+6)
+    count = math.ceil(len(places) / MAX_PLACES_PER_CALL)
+    size, extra = divmod(len(places), count)
+    chunks, start = [], 0
+    for index in range(count):
+        end = start + size + (1 if index < extra else 0)
+        chunks.append(places[start:end])
+        start = end
+    return chunks
+
+
+def assemble_missions(
+    chunks: list[list[MissionPlace]], batches: list[MissionBatch],
+) -> list[Mission]:
+    # 묶음마다 번호가 1부터 다시 붙는다. 모델이 돌려준 순서와 상관없이 번호로 장소와 짝지어 요청 순서대로 담는다
+    missions = []
+    for chunk, batch in zip(chunks, batches, strict=True):
+        by_number = {m.number: m for m in batch.missions}
+        missions += [build_mission(place, by_number[number]) for number, place in enumerate(chunk, start=1)]
+    return missions
+
+
 async def generate_missions(
     request: PhotoMissionGenerateRequest,
 ) -> PhotoMissionGenerateResponse:
     batch = await write_descriptions(request.places)
-    # 모델이 돌려준 순서와 상관없이, 번호로 요청의 장소와 짝지어 요청 순서대로 담는다
-    by_number = {m.number: m for m in batch.missions}
-    missions = [
-        build_mission(place, by_number[number])
-        for number, place in enumerate(request.places, start=1)
-    ]
-    return PhotoMissionGenerateResponse(missions=missions)
+    return PhotoMissionGenerateResponse(missions=assemble_missions([request.places], [batch]))
