@@ -16,6 +16,7 @@ from app.photomissions import (
     vlm_client,
 )
 from app.photomissions.pipeline_verify import ScoreResult
+from app.photomissions.question_format import QuestionAnswer
 from app.photomissions.schemas import (
     Coordinates,
     DisplayName,
@@ -514,6 +515,45 @@ async def test_verify_grades_with_the_answering_models_thresholds(fake_verify_st
     res = await pipeline_verify.verify_photo(_verify_request(None))
     assert (res.result, res.landmark_confidence, res.retry_hint) == expected
     assert res.match_score == 85
+
+
+async def test_verify_uses_question_rule_without_score_thresholds(fake_verify_steps, monkeypatch):
+    # 객관식 답이면 점수 기준을 읽지 않는다. self 기준이 비어 있어도(객관식 설정) 응답을 만든다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "vlm_format", "question")
+    monkeypatch.setattr(settings, "self_success_threshold", None)
+    monkeypatch.setattr(settings, "self_retry_threshold", None)
+    monkeypatch.setattr(settings, "self_landmark_threshold", None)
+    answer = QuestionAnswer(judgeable="yes", target="short", condition="na", place="yes")
+
+    async def fake_score(image_bytes, place_name, mission_description):
+        return ScoreResult(answer, "self")
+
+    monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
+    res = await pipeline_verify.verify_photo(_verify_request(None))
+    assert (res.result, res.match_score, res.retry_hint) == ("retry", 50.0, "미션 대상이 더 잘 보이게 다시 찍어주세요")
+
+
+async def test_gemini_answer_uses_gemini_thresholds_even_in_question_mode(fake_verify_steps, monkeypatch):
+    # 나중에 폴백으로 Gemini가 답하면 점수 응답이다. 설정이 객관식이어도 Gemini 기준으로 등급을 정한다
+    monkeypatch.setattr(settings, "verify_backend", "self")
+    monkeypatch.setattr(settings, "vlm_format", "question")
+    monkeypatch.setattr(settings, "self_success_threshold", None)
+
+    async def fake_score(image_bytes, place_name, mission_description):
+        return ScoreResult(VLM_RESULT, "gemini")  # 85점
+
+    monkeypatch.setattr(pipeline_verify, "score_photo", fake_score)
+    res = await pipeline_verify.verify_photo(_verify_request(None))
+    assert (res.result, res.match_score) == ("retry", 85)
+
+
+async def test_gemini_backend_ignores_vlm_format(monkeypatch):
+    # VLM_FORMAT은 자체 모델에만 쓴다. gemini면 객관식 설정이어도 Gemini 점수 판정이다
+    monkeypatch.setattr(settings, "vlm_format", "question")
+    monkeypatch.setattr(pipeline_verify, "generate_structured", _returning(VLM_RESULT))
+    monkeypatch.setattr(vlm_client, "score", _raising(AssertionError("자체 모델을 부르면 안 됨")))
+    assert await _score() == ScoreResult(VLM_RESULT, "gemini")
 
 
 async def test_unreadable_photo_is_422_without_calling_vlm(fake_verify_steps, monkeypatch):

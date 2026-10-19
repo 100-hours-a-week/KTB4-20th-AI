@@ -18,6 +18,7 @@ from app.core.config import Settings, settings
 from app.main import app, lifespan
 from app.photomissions import vlm_client
 from app.photomissions.pipeline_verify import normalize_image
+from app.photomissions.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer
 from app.photomissions.schemas import VlmResult
 from scripts.baseline_verify import judge_local
 
@@ -101,8 +102,25 @@ async def test_gemini_backend_starts_without_vlm_settings(monkeypatch, caplog):
 
 def test_self_backend_summary_shows_model_and_thresholds_without_secrets():
     summary = vlm_client.backend_summary(_settings(vlm_api_key="secret-key"))
-    assert summary == "verify 판정 백엔드: self (모델 qwen, 마감 60초, 기준 성공 80 / 재시도 40 / 랜드마크 50)"
+    assert summary == "verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 점수, 기준 성공 80 / 재시도 40 / 랜드마크 50)"
     assert "secret-key" not in summary and "vlm.example.com" not in summary
+
+
+def test_question_format_needs_no_score_thresholds():
+    # 객관식은 등급 규칙을 쓰므로 점수 기준 없이 시작한다. 점수 형식은 지금처럼 세 값이 모두 필요하다
+    no_thresholds = {"self_success_threshold": None, "self_retry_threshold": None, "self_landmark_threshold": None}
+    assert vlm_client.settings_errors(_settings(vlm_format="question", **no_thresholds)) == []
+    assert vlm_client.settings_errors(_settings(vlm_format="score", **no_thresholds))
+    assert vlm_client.settings_errors(_settings(vlm_format="question", vlm_model=" "))  # 다른 검사는 그대로
+
+
+def test_question_summary_names_the_rule_not_thresholds():
+    summary = vlm_client.backend_summary(_settings(
+        vlm_format="question", vlm_api_key="secret-key",
+        self_success_threshold=None, self_retry_threshold=None, self_landmark_threshold=None,
+    ))
+    assert summary.startswith("verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 객관식, 등급 규칙 rule_grade")
+    assert "None" not in summary and "secret-key" not in summary and "vlm.example.com" not in summary
 
 
 async def test_self_backend_starts_and_closes_client(monkeypatch):
@@ -185,6 +203,83 @@ async def test_success_on_first_try(fake_vlm):
     server = fake_vlm(ok)
     assert await _score() == VLM_RESULT
     assert len(server.requests) == 1
+
+
+ANSWER = QuestionAnswer(judgeable="yes", target="short", condition="na", place="unknown")
+
+
+async def test_question_format_returns_the_answer(fake_vlm):
+    server = fake_vlm(lambda r: _chat(ANSWER.model_dump_json()), vlm_format="question")
+    assert await _score() == ANSWER
+    sent = json.loads(server.requests[0].content)
+    assert sent["messages"][0]["content"] == QUESTION_SYSTEM_PROMPT
+    assert sent["response_format"]["json_schema"]["name"] == "QuestionAnswer"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(json.dumps({"judgeable": "yes", "target": None, "condition": None, "place": "yes"}), id="empty-target"),
+        pytest.param(json.dumps({"judgeable": "yes", "target": "enough", "condition": None, "place": "yes"}), id="empty-condition"),
+        pytest.param(VLM_RESULT.model_dump_json(), id="score-answer-in-question-mode"),
+    ],
+)
+async def test_invalid_question_answer_is_retried_then_502(fake_vlm, content):
+    # 서버가 스키마를 강제해도 Pydantic 검사(빈 칸이면 성공이 되는 답)는 여기서 다시 막는다
+    server = fake_vlm(lambda r: _chat(content), lambda r: _chat(content), vlm_format="question")
+    with pytest.raises(HTTPException) as exc:
+        await _score()
+    assert exc.value.status_code == 502
+    assert len(server.requests) == 2
+
+
+def question_ok(request):
+    return _chat(ANSWER.model_dump_json())
+
+
+async def test_question_bad_answer_then_valid_answer_succeeds(fake_vlm, monkeypatch):
+    recorded = {}
+    monkeypatch.setattr(sentry_sdk, "set_context", lambda name, value: recorded.update({name: value}))
+    bad = json.dumps({"judgeable": "yes", "target": None, "condition": None, "place": "yes"})
+    server = fake_vlm(lambda r: _chat(bad), question_ok, vlm_format="question")
+    assert await _score() == ANSWER
+    assert len(server.requests) == 2
+    assert recorded["vlm"]["attempts"] == 2 and recorded["vlm"]["last_error"] is None
+
+
+async def test_question_failure_is_recorded_like_score_mode(fake_vlm, monkeypatch):
+    # 객관식도 마지막 시도의 원인이 Sentry에 남는다 (형식 검증 실패는 ValidationError)
+    recorded = {}
+    monkeypatch.setattr(sentry_sdk, "set_context", lambda name, value: recorded.update({name: value}))
+    bad = json.dumps({"judgeable": "yes", "target": "enough", "condition": None, "place": "yes"})
+    fake_vlm(status_(500), lambda r: _chat(bad), vlm_format="question")
+    with pytest.raises(HTTPException):
+        await _score()
+    assert recorded["vlm"]["attempts"] == 2
+    assert recorded["vlm"]["upstream_status"] == 200
+    assert recorded["vlm"]["last_error"] == "ValidationError"
+
+
+async def test_question_rate_limit_keeps_retry_after_without_retry(fake_vlm):
+    server = fake_vlm(status_(429, {"Retry-After": "12"}), vlm_format="question")
+    with pytest.raises(HTTPException) as exc:
+        await _score()
+    assert (exc.value.status_code, exc.value.headers) == (429, {"Retry-After": "12"})
+    assert len(server.requests) == 1
+
+
+async def test_question_read_timeout_maps_to_504(fake_vlm):
+    server = fake_vlm(raise_(httpx.ReadTimeout), vlm_format="question")
+    with pytest.raises(HTTPException) as exc:
+        await _score()
+    assert exc.value.status_code == 504
+    assert len(server.requests) == 1
+
+
+async def test_question_answer_in_score_mode_is_not_accepted(fake_vlm):
+    server = fake_vlm(lambda r: _chat(ANSWER.model_dump_json()), ok)
+    assert await _score() == VLM_RESULT  # 첫 답은 점수 스키마와 안 맞아 재시도
+    assert len(server.requests) == 2
 
 
 RETRYABLE = [
@@ -389,6 +484,34 @@ async def test_request_matches_measurement_script(fake_vlm, monkeypatch):
     assert sent == measured[0]
     assert server.requests[0].url == "https://vlm.example.com/v1/chat/completions"
     assert server.requests[0].headers["Authorization"] == "Bearer test-key"
+
+
+async def test_question_request_matches_measurement_script(fake_vlm, monkeypatch):
+    # 객관식도 측정 스크립트(--format question)와 같은 요청이어야 dev 측정 결과가 서비스에 맞는다
+    buf = io.BytesIO()
+    Image.new("RGB", (1600, 1200), "white").save(buf, format="JPEG")
+    raw = buf.getvalue()
+    answer_json = ANSWER.model_dump_json()
+    measured = []
+    real_client = httpx.AsyncClient
+
+    def capture(request):
+        measured.append(json.loads(request.content))
+        return _chat(answer_json)
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda **kwargs: real_client(transport=httpx.MockTransport(capture), **kwargs),
+    )
+    case = {"photo": "p.jpg", "kind": "positive", "target": PLACE, "mission": MISSION}
+    await judge_local(case, raw, "http://measure/v1", "qwen", fmt="question")
+    monkeypatch.undo()
+
+    server = fake_vlm(lambda r: _chat(answer_json), vlm_format="question")
+    await vlm_client.score(normalize_image(raw), PLACE, MISSION)
+    sent = json.loads(server.requests[0].content)
+    assert sent.pop("max_tokens") == 512
+    assert sent == measured[0]
 
 
 # 7. 관측 — Sentry에 시도 횟수·걸린 시간·상대 서버 상태를 남기고 키·주소는 남기지 않는다

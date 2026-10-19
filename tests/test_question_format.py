@@ -86,3 +86,28 @@ def test_v2_prompt_changes_only_the_place_question():
     assert tail_v2 != tail
     assert tail.splitlines()[-1] == tail_v2.splitlines()[-1]  # "na" 줄은 그대로
     assert "확신" not in tail_v2
+
+
+def test_scripts_reuse_the_service_core_unchanged():
+    # 서비스(app)와 측정·학습 스크립트가 같은 지시문·스키마·규칙을 써야 측정 결과가 서비스에 그대로 맞는다
+    # 해시는 app으로 옮기기 전 값이다. 지시문이나 스키마를 바꾸면 측정·학습 데이터의 해석이 달라지므로 의도한 변경일 때만 고친다
+    import hashlib
+
+    from app.photomissions import question_format as core
+    from scripts import question_format as tools
+
+    assert tools.QuestionAnswer is core.QuestionAnswer
+    assert tools.rule_grade is core.rule_grade
+    assert tools.QUESTION_SYSTEM_PROMPT is core.QUESTION_SYSTEM_PROMPT
+
+    def sha(text: str) -> str:
+        return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+    assert sha(core.QUESTION_SYSTEM_PROMPT) == "635a3410e961"
+    assert sha(json.dumps(core.QuestionAnswer.model_json_schema(), sort_keys=True, ensure_ascii=False)) == "b3e4a692aef7"
+    example = to_example(
+        {"place": "첨성대", "mission": "첨성대 크게 찍기"},
+        {"q1": "yes", "q2": "short", "q3": "na", "q4": "unknown", "mission_id": "m"},
+        "a.jpg",
+    )
+    assert sha(json.dumps(example, sort_keys=True, ensure_ascii=False)) == "5819d5c5def7"

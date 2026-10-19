@@ -29,7 +29,9 @@ class Settings(BaseSettings):
     vlm_base_url: str = ""  # 자체 모델 서버 주소 (OpenAI 호환, 끝의 /v1까지)
     vlm_model: str = ""  # 자체 모델 서버의 모델 이름
     vlm_deadline_seconds: float | None = None  # 판정 한 번에 자체 모델을 기다리는 전체 시간(재시도 포함)
-    # 자체 모델용 판정 기준. Gemini 기준(pipeline_verify의 상수)을 조용히 쓰지 않도록 따로 받는다
+    # 자체 모델 답 형식. score = 점수(0~100) + 아래 기준, question = 객관식 4문항 + 등급 규칙(question_format.rule_grade)
+    vlm_format: Literal["score", "question"] = "score"
+    # 자체 모델용 판정 기준(score 형식만). Gemini 기준(pipeline_verify의 상수)을 조용히 쓰지 않도록 따로 받는다
     self_success_threshold: float | None = None
     self_retry_threshold: float | None = None
     self_landmark_threshold: float | None = None

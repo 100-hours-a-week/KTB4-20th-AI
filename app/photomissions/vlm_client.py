@@ -12,10 +12,16 @@ from fastapi import HTTPException, status
 
 from app.core.config import Settings
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
+from app.photomissions.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer
 from app.photomissions.schemas import VlmResult
 
 MAX_ATTEMPTS = 2  # 최초 1회 + 재시도 1회 (Gemini와 같은 정책)
-MAX_TOKENS = 512  # 점수 형식 답은 10/13 측정 287건에서 중앙값 111, 최대 141토큰이었다
+MAX_TOKENS = 512  # 점수 형식 답은 10/13 측정 287건에서 중앙값 111, 최대 141토큰이었다. 객관식 답은 네 칸뿐이라 더 짧을 것으로 본다(Qwen3 서비스 설정에서 미확인)
+# 답 형식별 (지시문, 응답 스키마). 측정 스크립트(baseline_verify.FORMATS의 score·question)와 같은 짝이다
+FORMATS: dict[str, tuple[str, type[VlmResult] | type[QuestionAnswer]]] = {
+    "score": (VERIFY_SYSTEM_PROMPT, VlmResult),
+    "question": (QUESTION_SYSTEM_PROMPT, QuestionAnswer),
+}
 # 연결·전송·연결 대기는 정상이면 금방 끝나서 짧게 둔다. 답을 기다리는 시간(읽기)은 전체 마감까지 쓴다
 CONNECT_TIMEOUT = 5.0
 WRITE_TIMEOUT = 10.0
@@ -47,6 +53,8 @@ def settings_errors(s: Settings) -> list[str]:
     if deadline is None or not math.isfinite(deadline) or deadline <= 0:  # inf면 마감이 사라지고 nan은 비교가 안 된다
         errors.append("VLM_DEADLINE_SECONDS는 0보다 큰 유한한 수여야 함")
 
+    if s.vlm_format == "question":  # 객관식은 점수 기준 대신 등급 규칙을 쓴다
+        return errors
     success, retry, landmark = s.self_success_threshold, s.self_retry_threshold, s.self_landmark_threshold
     if success is None or retry is None or landmark is None:
         # Gemini 기준(90/40/60)은 Pro로 정한 값이라 자체 모델에 그대로 쓰면 판정 의미가 달라진다
@@ -78,8 +86,13 @@ def backend_summary(s: Settings) -> str:
     # 서버를 켤 때 어느 모델로 판정하는지 한 줄로 보여 준다. 키와 서버 주소(Pod ID가 들어 있음)는 넣지 않는다
     if s.verify_backend != "self":
         return "verify 판정 백엔드: gemini"
+    if s.vlm_format == "question":
+        return (
+            f"verify 판정 백엔드: self (모델 {s.vlm_model}, 마감 {s.vlm_deadline_seconds:g}초, "
+            "형식 객관식, 등급 규칙 rule_grade: 판단 불가·다른 장소·대상 없음 실패 / 대상 부족·조건 안 지킴·장소 모름 재시도)"
+        )
     return (
-        f"verify 판정 백엔드: self (모델 {s.vlm_model}, 마감 {s.vlm_deadline_seconds:g}초, "
+        f"verify 판정 백엔드: self (모델 {s.vlm_model}, 마감 {s.vlm_deadline_seconds:g}초, 형식 점수, "
         f"기준 성공 {s.self_success_threshold:g} / 재시도 {s.self_retry_threshold:g} / "
         f"랜드마크 {s.self_landmark_threshold:g})"
     )
@@ -119,14 +132,17 @@ def get_client() -> tuple[httpx.AsyncClient, Settings]:
 
 # 판정 호출
 
-def build_payload(model: str, image_bytes: bytes, place_name: str, mission_description: str) -> dict:
-    # 측정 스크립트(judge_local)와 같은 요청이어야 dev 측정 결과가 서비스에도 그대로 맞는다
+def build_payload(
+    model: str, image_bytes: bytes, place_name: str, mission_description: str, fmt: str = "score"
+) -> dict:
+    # 측정 스크립트(judge_local)와 같은 요청이어야 dev 측정 결과가 서비스에도 그대로 맞는다 (max_tokens만 서비스에 더 있다)
     # 온도는 측정 때처럼 넣지 않는다 (vLLM은 모델 설정 파일의 기본값을 쓴다)
+    system_prompt, schema = FORMATS[fmt]
     image_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode()
     return {
         "model": model,
         "messages": [
-            {"role": "system", "content": VERIFY_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": [
                 {"type": "text", "text": f"목표 장소: {place_name}\n미션 내용: {mission_description}"},
                 {"type": "image_url", "image_url": {"url": image_url}},
@@ -134,7 +150,7 @@ def build_payload(model: str, image_bytes: bytes, place_name: str, mission_descr
         ],
         "response_format": {
             "type": "json_schema",
-            "json_schema": {"name": VlmResult.__name__, "schema": VlmResult.model_json_schema()},
+            "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema()},
         },
         "max_tokens": MAX_TOKENS,
     }
@@ -159,21 +175,22 @@ def _retry_after(response: httpx.Response) -> str:
     return str(min(int(value), MAX_RETRY_AFTER))
 
 
-def _parse(response: httpx.Response) -> VlmResult:
+def _parse(response: httpx.Response, schema: type[VlmResult] | type[QuestionAnswer]) -> VlmResult | QuestionAnswer:
     # 답 형식이 하나라도 어긋나면 재시도 대상이다 (JSON 깨짐, choices 비어 있음, content 없음, 스키마 불일치)
+    # 서버의 json_schema 강제는 Pydantic 검사(객관식의 빈 칸 검사 등)까지 대신하지 않아서 여기서 다시 검사한다
     try:
         content = response.json()["choices"][0]["message"]["content"]
         if not isinstance(content, str):
             raise TypeError("content가 문자열이 아님")
-        return VlmResult.model_validate_json(content)
+        return schema.model_validate_json(content)
     # ValueError: JSON 깨짐과 UTF-8이 아닌 응답(UnicodeDecodeError)을 함께 잡는다. ValidationError도 여기 속한다
     except (ValueError, KeyError, IndexError, TypeError) as e:
         raise _Retryable(_bad_gateway()) from e
 
 
 async def _attempt(
-    client: httpx.AsyncClient, payload: dict, remaining: float, trace: dict
-) -> VlmResult:
+    client: httpx.AsyncClient, payload: dict, schema: type[VlmResult] | type[QuestionAnswer], remaining: float, trace: dict
+) -> VlmResult | QuestionAnswer:
     # 한 번 호출한다. 시간 초과 값은 모두 남은 시간 이하로 둔다
     timeout = httpx.Timeout(
         connect=min(CONNECT_TIMEOUT, remaining),
@@ -200,7 +217,7 @@ async def _attempt(
     if response.status_code >= 400:  # 401·403·404 등은 설정 문제라 다시 불러도 같다
         raise _bad_gateway()
     try:
-        return _parse(response)
+        return _parse(response, schema)
     except _Retryable as e:
         trace["last_error"] = type(e.__cause__).__name__  # 예: JSONDecodeError, ValidationError
         raise
@@ -228,10 +245,12 @@ def _can_retry(remaining: float) -> bool:
     return remaining > 0 and remaining > CONNECT_TIMEOUT
 
 
-async def score(image_bytes: bytes, place_name: str, mission_description: str) -> VlmResult:
+async def score(image_bytes: bytes, place_name: str, mission_description: str) -> VlmResult | QuestionAnswer:
     # 재시도까지 합쳐 VLM_DEADLINE_SECONDS 안에 끝낸다. 마감은 여기 들어온 순간부터 잰다 (사진 받기·줄이기 제외)
+    # VLM_FORMAT에 따라 점수(VlmResult) 또는 객관식 답(QuestionAnswer)을 돌려준다. 등급은 pipeline_verify가 정한다
     client, s = get_client()
-    payload = build_payload(s.vlm_model, image_bytes, place_name, mission_description)
+    payload = build_payload(s.vlm_model, image_bytes, place_name, mission_description, s.vlm_format)
+    schema = FORMATS[s.vlm_format][1]
     loop = asyncio.get_running_loop()
     started = loop.time()  # 시스템 시계가 바뀌어도 흔들리지 않는 시계
     deadline = started + float(s.vlm_deadline_seconds or 0)
@@ -242,7 +261,7 @@ async def score(image_bytes: bytes, place_name: str, mission_description: str) -
             while True:
                 trace["attempts"] += 1
                 try:
-                    return await _attempt(client, payload, deadline - loop.time(), trace)
+                    return await _attempt(client, payload, schema, deadline - loop.time(), trace)
                 except _Retryable as e:
                     if trace["attempts"] >= MAX_ATTEMPTS or not _can_retry(deadline - loop.time()):
                         raise e.error from e.__cause__  # 재시도를 못 하면 원래 원인(502) 그대로
