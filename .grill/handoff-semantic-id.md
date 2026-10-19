@@ -4,53 +4,52 @@
 
 ## 1. 변동 상태 (이 절만 자주 바뀐다)
 
-- 마지막 갱신: 2026-10-19(PR #86 머지 후, 다음 작업 전환 시점). 기준 커밋(`dev`)은 적지 않는다. 아래 점검 명령으로 확인한다
+- 마지막 갱신: 2026-10-19(여러 날 일정 구현 PR 3 생성 시점). 기준 커밋(`dev`)은 적지 않는다. 아래 점검 명령으로 확인한다
 - 마감: 최종 발표·제출·시연은 2026-10-19(월) 빠르면, 20일(화) 늦어도
 - 구현 상태: M1~M5 완료. 모델 경로(Semantic ID 생성 + 후보 제한 빔 서치)와 서빙(RunPod GPU 우선, 실패 시 규칙)이 dev에 들어가 있다. 운영 기본값은 아직 규칙(`PLACE_SELECTION_MODE=rule`)이라 사용자가 받는 일정은 규칙 결과다
-- ADR 상태: 0000 Superseded, 0002~0007 Accepted(0007 첫 장소 무작위는 PR #86 머지로 확정)
-- **PR #86 머지 완료**(2026-10-19): 모델 경로의 첫 장소를 모델 상위 30곳 중 요청 해시 시드로 무작위 선택(ADR-0007). 전체 7,680건 불변식 위반 0, 이미지 v2 GPU 확인
-- **#86 리뷰 질문과 답변**(확인함, 2026-10-19 PR 코멘트): 리뷰어 `jiyoung720`의 "같은 그룹이 같은 조건으로 재생성하면 똑같은 일정이 나오나요?"에 `whale5500d`가 "입력으로 들어가는 요청값이 완전히 같으면 똑같은 일정이 생성됩니다."라고 답했고(00:07:30 UTC) 15초 뒤 머지했다. 사실: 시드가 요청 본문 전체의 해시라서 요청이 같으면 일정이 같다. 이 변경이 늘린 것은 서로 다른 요청 사이의 다양성이고 재생성 자체는 해결하지 못한다. 후속 후보: 요청에 선택 필드 `regenerate_seed` 추가(BE 협의 필요, BE가 재생성 때 무엇을 보내는지는 확인하지 못함)
-- 서빙: 엔드포인트 `zspx96xu5zs7ge`, 이미지 `whale2200d/place-model-runpod:v2`(digest `sha256:b683…a9c4`; v1은 `sha256:21c0e171…92a6`이고 `first_k`·`seed`를 무시함). Active 0, Idle 5초, FlashBoot 끔, GPU는 Ada/Ampere 16GB 그룹. 확인 후 Max Workers를 0으로 되돌려 일시 정지 상태다(사용자가 콘솔에서 변경, 내가 직접 확인하지는 못함). 다시 쓰려면 Max를 1~2로 올린다. 운영 활성화에는 `PLACE_SELECTION_MODE=model`, `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`만 필요하다(`MODEL_DIR`은 비움). 키 `placemodel-endpoint-1017`(Restricted)은 `.env`에만 있다. AWS 서버에는 CPU 경로를 배포하지 않는 것으로 가정(폴백 순서 GPU → 규칙)
-- 평가 결과: 최종용은 2026-10-16에 free 조건으로 한 번 열었다(재실행 금지). 모델 13.8%, 인기순 5.9%, 규칙 2.5%, 5개 지역 비열세 통과. 서비스 조건(top2-slots, 개발용) 모델 5.9%, 규칙 2.4%, 인기순 5.5%로 인기순 대비 차이는 없다(+0.4%p, 구간 −0.3~+1.2). 자세한 수치는 ADR-0003·0005·0006
+- ADR 상태: 0000 Superseded, 0002~0007 Accepted, **0008 Proposed**(여러 날 일정과 3개 안, #90으로 머지됨). 0008은 구현 PR이 머지되면 Accepted로 바꾼다. 그때 ADR-0007의 Status 이력에 "시드 입력 정의가 ADR-0008로 바뀜"을 추가한다(ADR-0007 본문은 수정하지 않는다)
+- 서빙: 엔드포인트 `zspx96xu5zs7ge`, 이미지 `whale2200d/place-model-runpod:v2`(digest `sha256:b683…a9c4`). v2는 `days` 요청을 모르고 오류 응답을 돌려준다. **`days`를 아는 v3 이미지는 아직 빌드하지 않았다.** Active 0, Idle 5초, FlashBoot 끔, GPU는 Ada/Ampere 16GB 그룹. Max Workers를 0으로 되돌려 일시 정지 상태다(사용자가 콘솔에서 변경, 내가 직접 확인하지는 못함). 운영 활성화에는 `PLACE_SELECTION_MODE=model`, `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`만 필요하다(`MODEL_DIR`은 비움). AWS 서버에는 CPU 경로를 배포하지 않는 것으로 가정(폴백 순서 GPU → 규칙). 키 `placemodel-endpoint-1017`(Restricted)은 `.env`에만 있다
+- 평가 결과: 최종용은 2026-10-16에 free 조건으로 한 번 열었다(재실행 금지). 모델 13.8%, 인기순 5.9%, 규칙 2.5%, 5개 지역 비열세 통과. 서비스 조건(top2-slots, 개발용) 모델 5.9%, 규칙 2.4%, 인기순 5.5%로 인기순 대비 차이는 없다. 자세한 수치는 ADR-0003·0005·0006
 - 취향 반영 한계: 학습 데이터에서 방문이 미션 기반 취향을 거의 따르지 않고(lift 1.06), 모델의 헤더 반응이 일관되지 않다. 취향 반영은 대부분 후보 제한(ADR-0006)이 한다
 - 산출물: `$AIHUB_ROOT/derived/semantic_id/v1/m3/`(places.json, visit_map.json, model_a, model_b, bundle_a, eval, runpod). `MANIFEST_m3.json`·`MANIFEST_m3b.json`에 기록. 이후 만든 `eval/dev_pref_sensitivity_model_a.json`, `eval/dev_first_place_variants_*.json`은 어떤 MANIFEST에도 없다(필요하면 `manifest --only-new`로 추가)
 - 작업 트리: `TODO.md`는 사용자의 개인 파일이므로 건드리거나 커밋하지 않는다. 로컬 브랜치 정리는 사용자가 한다
 
-### 다음 작업 후보: 여러 날 일정 지원 (사용자 담당: 서버리스 결과를 AI 서버에서 가공해 BE에 전달)
+### 진행 중: 여러 날 일정과 3개 안 (ADR-0008)
 
-사용자 설명(그대로): 서버리스로 서빙받은 값을 AI 서버에서 가공해 백엔드 서버로 제공하는 작업이고, 바로 전달하면 5~6개 장소만 제공하며 하루 치 일정이므로 전체 일정이 길어지면 더 많은 장소가 필요하다. 설계부터 시작하며(grill-me) 사용자의 승인 전에는 코드를 쓰지 않는다. 아래는 코드로 확인한 사실과 확인하지 못한 것이다.
+설계는 끝났다. 결정과 근거는 ADR-0008과 `.grill/place-selection-multi-day.md`(결정 13개, 대안, 가정, 열린 항목)가 기록하고, 이 문서에는 복제하지 않는다.
 
-코드로 확인한 사실 (2026-10-19)
-- 5~6곳은 서버리스 모델의 한계가 아니라 AI 서버의 슬롯 계획이 정한다. `slot_plan.build_slot_plan`이 하루 슬롯을 MORNING, LUNCH, AFTERNOON_FIRST, AFTERNOON_SECOND, DINNER 5개로 만들고, 야간 ACTIVITY 문항 점수가 `EVENING_SLOT_THRESHOLD`를 넘으면 EVENING을 더해 6개로 만든다. 서버리스 핸들러는 받은 슬롯 후보 목록마다 장소 하나를 돌려줄 뿐이다
-- 응답 `Place_Selection_Response_Data`는 `places: list[Place]` 하나이고, `Place`에는 일자나 시간대 필드가 없다(`selected_for`, `matched_preferences`와 구글 장소 데이터뿐). 일자를 나타내려면 응답 스키마가 바뀐다
-- 요청 `Place_Selection_Request`는 `region`, `start_date`, `end_date`, `members`(1~8명)다. 날짜는 검증(시작일이 과거가 아님, 종료일이 시작일 이전이 아님)에만 쓰이고, `app/trips`의 장소 선정 코드에서는 쓰이지 않는다. 시드 해시에만 요청 본문의 일부로 들어간다
-- `app/trips/router.py`의 `place_selection` docstring TODO에 하루 단위 함수를 날짜별로 반복 호출하면 생기는 문제가 적혀 있다: (1) 매일 같은 카테고리 배치 (2) 매일 같은 장소 선택 (3) 첫날·마지막 날 구분 없음 (4) 저녁 이후 슬롯 매일 생성. 필요한 추가 요소: 일자 유형별 템플릿, 일자 간 카테고리 분배 규칙(기획 결정 선행), 여행 전체 장소 중복 제거, 저녁 이후 슬롯 빈도 규칙
-- 모델 학습은 하루의 앞 6곳까지만 썼다(`scripts/semantic_id/train_data.py`의 `MAX_VISITS = 6`, 로그의 하루는 최대 23곳). 6곳을 넘는 길이를 한 번에 만든 검증은 없다
-- 시드는 요청 본문 전체의 해시라서, 같은 요청으로 날짜별 호출을 반복하면 일자마다 같은 시드가 된다. 일자별로 다른 결과를 내려면 일자 정보를 시드에 넣거나 일자별 시드를 파생해야 한다
-- 측정값(ADR-0004): 따뜻한 상태 호출당 약 1.3초(p95 1.43초), 동시 4요청 p95 5.46초(워커 1개), 유휴 후 첫 요청 10~13초, 요청 크기 15MB까지 성공. GPU 호출 제한 20초, 연속 3회 실패 시 60초 차단. 일자별로 호출하면 호출 횟수가 일수만큼 늘어난다(일수가 늘 때의 총 지연은 측정하지 않음)
+구현은 4개 PR로 나눈다.
+- PR 1 #91 머지: 핸들러·추론 엔진이 `days` 요청(후보 풀을 이름 붙여 한 번만 보내고 슬롯은 풀 이름으로 가리킴)을 처리. 기존 `slots` 요청은 그대로
+- PR 2 #92 머지: 여행 전체 슬롯 계획(`build_trip_slot_plan`)과 규칙(`trip_rule.py`)·모델(`model/trip_selection.py`) 경로의 여러 날 선택. 라우터에는 연결하지 않았음
+- PR 3 #93 **열림(리뷰어 `jiyoung720`)**: 요청 `external_factors`와 9일 상한, 응답 `places[안][일자][장소]`, 시드, 3개 안 조립(`services/trip_orchestrator.py`). **응답이 바뀌는 breaking change라 BE가 새 구조를 읽을 준비가 된 시점에 머지해야 한다**(시점은 사용자가 BE와 맞춘다). 검증: 조합 테스트 7,680건 통과(25분 22초, 규칙 모드), 모델 경로 불변식 7,680건 위반 0(1,019초, 로컬 CPU, 하루 일정, 취향 안)
+- PR 4 **미착수**: 측정(아래)
 
-확인하지 못한 것
-- BE가 현재 응답을 어떻게 쓰는지(일자 배열을 받을 수 있는지, 장소 수 5~6에 의존하는지)
-- 여행 일수의 상한과 BE가 기대하는 장소 수
-- 중복 방지가 여행 전체로 필요한지의 기획 결정, 일자 간 카테고리 분배 규칙
-- 한 요청에 여러 날의 슬롯 후보를 담는 방식의 동작(구현·측정한 적 없음)
+PR 3 머지 뒤에도 할 일
+1. v3 이미지 빌드·푸시와 RunPod 엔드포인트 교체. 도커 푸시는 자동 모드 분류기가 막을 수 있어 사용자에게 `! 명령`으로 부탁한다. 모델 모드(`PLACE_SELECTION_MODE=model`)는 v3 배포 뒤에만 켠다. v3 전에 켜면 `days` 호출이 실패하고 `[1]`, `[2]`가 규칙 변형으로 채워지며 로그("모델 경로 실패, 규칙 변형으로 채움")로만 드러난다
+2. PR 4 측정(RunPod 유료 호출은 호출 횟수를 정해 사용자 승인을 받는다): 9일치 모델 호출 한 번의 지연(p95 15초 기준, 넘으면 일자를 나눠 부르는 방식으로 재설계), 전체 응답 최악 시간(BE 응답 대기 30초, 변경 가능), 안 사이 겹침(`[1]`과 `[0]`이 일자당 주간·식사 슬롯 기준 2곳 이상 다름, 못 채우면 안 사이 중복 제거 도입), 모델 다양성 안 `[2]`의 3위·4위 카테고리 비율 통계(스크립트에 아직 없음). 다양성 안의 전체 불변식 검사는 허용 카테고리 항목이 4개 카테고리를 모두 허용해 변별력이 없어 돌리지 않기로 했다
+3. ADR-0008을 Accepted로 바꾸는 문서 PR + ADR-0007 Status 이력 추가
+4. 열린 항목(`.grill/place-selection-multi-day.md`): 규칙 변형의 K(현재 10, 잠정), 모델 다양성 안의 3위·4위 비율과 헤더, `reasons.detail`·`closure_risk` 사용 여부, 모델 경로 운영 활성화 결정
+
+확인하지 못한 것: BE가 새 응답 구조를 받는 시점과 방식(합의된 모양은 PR 3 본문과 ADR-0008), GPU 경로의 `days` 동작(v3 배포 전이라 호출한 적 없음), 여러 날·날씨 신호가 있는 날의 대규모 조합 검사
 
 ### 미결·후속 작업 (우선순위 순)
 
-1. 여러 날 일정 지원 설계(위). 재생성 필드(`regenerate_seed`)는 같은 요청 스키마를 다루므로 이 설계와 함께 BE에 협의하는 것을 추천
+1. 위 "진행 중" 절의 PR 3 머지 협의, v3 이미지, PR 4 측정
 2. 품질 하한을 "영업 종료만 제외"로 풀지 여부: 하한만 풀면 결과가 나빠졌다(제주항 등 교통 거점이 추천됨). 교통 거점·항구·공항 제외 시험을 먼저 하고 결정한다. 풀면 규칙 경로에도 영향이 있어 코드 사전(약 9,957곳) 재패키징, 새 이미지, 7,680건 재검증, README 표 갱신이 필요하다
 3. 모델 경로 운영 활성화 결정과 환경변수 배포. 쓰지 않으면 엔드포인트 삭제, 키 폐기, Docker Hub 토큰·이미지 정리
-4. 선택: 큰 모델 B를 Recall@10으로 평가(기준을 먼저 정한다: 서비스 조건 개발용 Recall@10 차이의 신뢰구간 하한 > 0), 새 평가 파일의 MANIFEST 추가
-5. 최종 발표 자료: A4 보고서(Claude Docs 아티팩트로 만든 적 있음)와 `docs/trips/place-selection-evolution.md`, `docs/trips/semantic-id-glossary.md`를 활용
+4. 재생성 요청: 같은 요청이면 같은 일정이라 재생성이 해결되지 않는다(ADR-0007의 한계). 후속 후보는 요청에 선택 필드 `regenerate_seed` 추가(BE 협의 필요, BE가 재생성 때 무엇을 보내는지는 확인하지 못함). 새 요청 스키마(PR 3)와 함께 협의하는 것을 추천
+5. 선택: 큰 모델 B를 Recall@10으로 평가(기준을 먼저 정한다: 서비스 조건 개발용 Recall@10 차이의 신뢰구간 하한 > 0), 새 평가 파일의 MANIFEST 추가
+6. precheck 구현(기상청 API, 판정 기준, 배치, `region` 제거): 이번 범위 밖이며 코드는 기상청 격자 변환(`precheck.py`)뿐이다. place-selection은 precheck 응답과 같은 모양의 `external_factors`를 받기만 한다
+7. 최종 발표 자료: A4 보고서(Claude Docs 아티팩트로 만든 적 있음)와 `docs/trips/place-selection-evolution.md`, `docs/trips/semantic-id-glossary.md`를 활용
 
 ### 다음 세션 재개 방법
 
 1. 같은 폴더(`KTB4-20th-AI`)에서 `claude`를 실행한다. 이전 대화를 이어 가려면 `claude --continue`(마지막 세션) 또는 `claude --resume`(목록에서 선택)을 쓴다. 대화가 길어 요약본으로 이어지므로, 새 세션이 낫다면 그냥 `claude`로 시작하고 아래 4번을 말한다
-2. 세션이 시작되면 `CLAUDE.md`의 순서를 따른다: 이 문서 → ADR-0003~0005 → `.grill/attention-based-place-recommendation-tasks.md`의 해당 절. 낯선 용어는 `docs/trips/semantic-id-glossary.md`, 설계 변천은 `docs/trips/place-selection-evolution.md`를 읽는다
-3. 상태 점검: `git branch --show-current`, `git status --short`, `git log --oneline -3`, `gh pr list --state open`. #86은 머지됐다. 로컬 브랜치가 `dev`가 아니면 `dev`로 옮기고 `git pull`한 뒤 시작한다. `docs/handoff-multi-day` 브랜치가 남아 있으면 PR 머지 여부를 본다
-4. 시작 때 사용자에게 줄 말 예: "handoff를 읽고 여러 날 일정 지원 설계부터 시작하자"
+2. 세션이 시작되면 `CLAUDE.md`의 순서를 따른다: 이 문서 → ADR-0003~0005 → `.grill/attention-based-place-recommendation-tasks.md`의 해당 절. 여러 날 일정 작업이면 추가로 ADR-0006~0008과 `.grill/place-selection-multi-day.md`를 읽는다. 낯선 용어는 `docs/trips/semantic-id-glossary.md`, 설계 변천은 `docs/trips/place-selection-evolution.md`를 읽는다
+3. 상태 점검: `git branch --show-current`, `git status --short`, `git log --oneline -3`, `gh pr list --state open`. #93이 머지됐는지, 로컬 브랜치가 `dev`가 아니면 `dev`로 옮기고 `git pull`한 뒤 시작한다
+4. 시작 때 사용자에게 줄 말 예: "handoff를 읽고 PR 3 머지 상태를 확인한 뒤 PR 4 측정 준비부터 시작하자"
 5. 규칙: 승인 전에는 파일 생성·브랜치 생성·푸시를 하지 않는다. 푸시와 PR 생성은 사용자가 요청할 때만 한다. 자기 PR은 머지하지 않는다. RunPod 호출은 유료이니 매번 승인을 받는다. 키는 `.env`에만 둔다
-6. 환경 주의: `.env`의 `PLACE_SELECTION_MODE`는 테스트 전에 `rule`이어야 한다(`PLACE_SELECTION_MODE=rule uv run pytest -q`). 도커 이미지 푸시, 푸시·PR 같은 공개 작업은 자동 모드 분류기가 막을 수 있으니 그때는 사용자에게 `! <명령>`으로 실행해 달라고 한다. 모델 파일을 쓰는 로컬 명령은 `uv run --with onnxruntime --with numpy python -m ...`로 돌린다
+6. 환경 주의: `.env`의 `PLACE_SELECTION_MODE`는 테스트 전에 `rule`이어야 한다(`PLACE_SELECTION_MODE=rule uv run pytest -q`). 전체 조합 테스트(`-m exhaustive`)는 약 25분, 모델 경로 불변식 검사(`scripts/check_model_invariants.py`)는 약 17분이다. 도커 이미지 푸시, 푸시·PR 같은 공개 작업은 자동 모드 분류기가 막을 수 있으니 그때는 사용자에게 `! <명령>`으로 실행해 달라고 한다. 모델 파일을 쓰는 로컬 명령은 `uv run --with onnxruntime --with numpy python -m ...`로 돌린다. `gh pr create` 직후 리뷰어 지정이 GitHub 일시 오류로 실패한 적이 있으니 `gh pr view --json reviewRequests`로 확인한다
 
 
 ### 시작할 때 상태 점검 명령
