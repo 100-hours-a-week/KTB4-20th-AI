@@ -457,3 +457,10 @@ async def test_log_for_deadline(writer, caplog, deadline_spy):
     [line] = _generate_logs(caplog)
     assert (line["final_status"], line["error_kind"]) == (504, "미션 문구 생성 시간 초과")
     assert (line["chunks"][0]["status"], line["chunks"][0]["cancelled_while"]) == ("cancelled", "running")
+
+
+def test_start_checks_settings_for_scripts(monkeypatch):
+    # 측정 스크립트는 앱 시작 검사를 거치지 않으므로 start()가 마감 값을 검사한다
+    monkeypatch.setattr(settings, "generate_deadline_seconds", float("nan"))
+    with pytest.raises(RuntimeError, match="GENERATE_DEADLINE_SECONDS"):
+        pipeline_generate.start()

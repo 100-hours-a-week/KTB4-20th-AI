@@ -45,6 +45,8 @@ class ChunkTrace:
 
 def start() -> None:
     # 앱 시작(lifespan) 때 만든다. 이벤트 루프가 바뀌는 테스트·스크립트도 실행마다 새로 만들게 한다
+    # 설정도 여기서 검사한다. 앱 시작 검사를 거치지 않는 측정 스크립트도 잘못된 마감 값으로 돌지 않게
+    check_settings(settings)
     global _call_slots
     _call_slots = asyncio.Semaphore(MAX_CONCURRENT_CALLS)
 
@@ -63,8 +65,8 @@ def settings_errors(s: Settings) -> list[str]:
 
 
 def check_settings(s: Settings) -> None:
-    if errors := settings_errors(s):
-        raise RuntimeError("generate 설정 오류: " + " / ".join(errors))
+    if problems := settings_errors(s):
+        raise RuntimeError("generate 설정 오류: " + " / ".join(problems))
 
 
 def new_mission_id() -> str:
@@ -87,7 +89,7 @@ def covers_every_place(batch: MissionBatch, place_count: int) -> bool:
 
 
 async def write_descriptions(places: list[MissionPlace], trace: dict | None = None) -> MissionBatch:
-    # 1. 미션 문구 + scope 생성. 장소 전부를 한 번의 호출로 만든다. mission_id는 여기서 다루지 않는다.
+    # 1. 미션 문구 + scope 생성. 묶음 하나(장소 최대 MAX_PLACES_PER_CALL곳)를 한 번의 호출로 만든다. mission_id는 여기서 다루지 않는다.
 
     # description은 verify의 mission_description으로 재사용되므로, 사진만 보고 수행 여부를 판단할 수 있어야 한다.
     # scope 판정 기준(완료 규칙)은 MISSION_SYSTEM_PROMPT에 있다.
@@ -219,8 +221,8 @@ async def _write_chunks(chunks: list[list[MissionPlace]], traces: list[ChunkTrac
         for w in workers:
             w.cancel()
         await asyncio.wait(workers)
-    errors = [w.exception() for w in workers if not w.cancelled() and w.exception() is not None]
-    if bugs := [e for e in errors if not isinstance(e, HTTPException)]:
+    raised = [w.exception() for w in workers if not w.cancelled() and w.exception() is not None]
+    if bugs := [e for e in raised if not isinstance(e, HTTPException)]:
         # 프로그램 오류가 하나라도 있으면 502·429로 숨기지 않고 그대로 올린다
         raise BaseExceptionGroup("generate 묶음 처리 중 프로그램 오류", bugs)
     if failures:
