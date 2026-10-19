@@ -16,6 +16,7 @@ init_sentry()  # FastAPI 앱을 만들기 전에 초기화해야 요청 에러�
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     pipeline_generate.check_settings(settings)
+    pipeline_generate.start()
     # 자체 모델로 판정할 때만 설정을 확인한다. 틀리면 요청을 받기 전에 시작이 멈춘다
     if settings.verify_backend == "self":
         vlm_client.check_settings(settings)
@@ -29,6 +30,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await vlm_client.close()  # 시작하지 않았으면 아무것도 하지 않는다
+        pipeline_generate.close()
 
 
 app = FastAPI(title="KTB4-20th-AI", lifespan=lifespan)

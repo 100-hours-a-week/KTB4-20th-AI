@@ -167,6 +167,7 @@ def to_request(batch: list[dict], batch_id: str) -> PhotoMissionGenerateRequest:
 
 
 async def main(argv: list[str] | None = None) -> None:
+    pipeline_generate.start()  # 서비스는 lifespan에서 부른다. 스크립트는 앱 없이 generate_missions를 직접 부르므로 여기서
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--manifest", type=pathlib.Path, required=True)
     ap.add_argument("--out", type=pathlib.Path, required=True, help="결과 JSONL 경로 (레포 밖에 둘 것)")

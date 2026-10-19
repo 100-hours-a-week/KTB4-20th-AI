@@ -25,7 +25,7 @@ from fastapi import HTTPException
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from app.photomissions import gemini_client
+from app.photomissions import gemini_client, pipeline_generate
 from app.photomissions.pipeline_generate import generate_missions
 from app.photomissions.pipeline_verify import normalize_image
 from scripts.build_train_pilot import TRAIN_CATEGORIES
@@ -125,6 +125,7 @@ def _base(row: dict) -> dict:
 
 
 async def main() -> None:
+    pipeline_generate.start()  # 서비스는 lifespan에서 부른다. 스크립트는 앱 없이 generate_missions를 직접 부르므로 여기서
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pilot-dir", type=pathlib.Path, required=True)
     ap.add_argument("--aihub", type=pathlib.Path, required=True)
