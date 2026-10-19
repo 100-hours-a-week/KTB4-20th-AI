@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     self_retry_threshold: float | None = None
     self_landmark_threshold: float | None = None
 
+    # generate 한 번의 전체 상한(초). 장소 묶음 대기·호출·재시도를 모두 포함한다. 백엔드 읽기 타임아웃(30초)보다 짧게
+    generate_deadline_seconds: float = 25.0
+
     # 장소 선정 방식. rule(ADR-0000 규칙, 기본) / model(학습한 모델, ADR-0003). 모델 경로가 실패하면 규칙으로 되돌린다
     place_selection_mode: Literal["rule", "model"] = "rule"
     model_dir: str = ""  # model.onnx와 codes.json이 있는 폴더(CPU 경로)

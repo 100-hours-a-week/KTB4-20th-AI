@@ -1,9 +1,11 @@
+import math
 import uuid
 
 import httpx
 from fastapi import HTTPException, status
 from google.genai import errors
 
+from app.core.config import Settings
 from app.photomissions.gemini_client import generate_structured
 from app.photomissions.prompts import MISSION_SYSTEM_PROMPT
 from app.photomissions.schemas import (
@@ -15,6 +17,19 @@ from app.photomissions.schemas import (
     PhotoMissionGenerateResponse,
     T_Preference,
 )
+
+
+def settings_errors(s: Settings) -> list[str]:
+    # generate 설정 검사. 틀리면 앱이 시작되지 않는다 (verify 백엔드와 상관없이 항상 검사)
+    deadline = s.generate_deadline_seconds
+    if not math.isfinite(deadline) or deadline <= 0:  # inf면 마감이 사라지고 nan은 비교가 안 된다
+        return ["GENERATE_DEADLINE_SECONDS는 0보다 큰 유한한 수여야 함"]
+    return []
+
+
+def check_settings(s: Settings) -> None:
+    if errors := settings_errors(s):
+        raise RuntimeError("generate 설정 오류: " + " / ".join(errors))
 
 
 def new_mission_id() -> str:

@@ -2,6 +2,8 @@ import re
 
 import pytest
 
+from app.core.config import Settings
+from app.photomissions import pipeline_generate
 from app.photomissions.pipeline_generate import (
     build_mission,
     covers_every_place,
@@ -78,3 +80,22 @@ def test_covers_every_place_in_any_order():
 )
 def test_covers_every_place_rejects_mismatch(numbers):
     assert covers_every_place(_batch(*numbers), place_count=3) is False
+
+
+def _generate_settings(**overrides) -> Settings:
+    return Settings(_env_file=None, **overrides)
+
+
+def test_generate_deadline_default_is_shorter_than_backend_timeout():
+    # 백엔드 읽기 타임아웃(30초) 안에 우리가 먼저 끝내야 원인별 코드(504 등)가 백엔드에 남는다
+    s = _generate_settings()
+    assert pipeline_generate.settings_errors(s) == []
+    assert s.generate_deadline_seconds < 30
+
+
+@pytest.mark.parametrize("deadline", [0, -1, float("nan"), float("inf")])
+def test_generate_deadline_must_be_positive_finite(deadline):
+    s = _generate_settings(generate_deadline_seconds=deadline)
+    assert pipeline_generate.settings_errors(s)
+    with pytest.raises(RuntimeError, match="GENERATE_DEADLINE_SECONDS"):
+        pipeline_generate.check_settings(s)

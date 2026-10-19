@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.core.sentry import init_sentry
-from app.photomissions import vlm_client
+from app.photomissions import pipeline_generate, vlm_client
 from app.photomissions.router import router as photomissions_router
 from app.trips.router import router as trips_router
 
@@ -15,6 +15,7 @@ init_sentry()  # FastAPI 앱을 만들기 전에 초기화해야 요청 에러�
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    pipeline_generate.check_settings(settings)
     # 자체 모델로 판정할 때만 설정을 확인한다. 틀리면 요청을 받기 전에 시작이 멈춘다
     if settings.verify_backend == "self":
         vlm_client.check_settings(settings)
