@@ -28,6 +28,7 @@ MAX_PLACES_PER_CALL = 8  # 10곳 한 번 호출이 최대 19.81초(3번 측정).
 # (서버가 여러 대면 전체 동시 호출은 3 × 대수). 묶음 안 재시도가 끝날 때까지 자리를 잡고 있는다
 MAX_CONCURRENT_CALLS = 3
 _call_slots: asyncio.Semaphore | None = None
+_cleanups: set[asyncio.Task] = set()  # 부모가 먼저 빠져나간 정리 태스크도 끝날 때까지 붙잡아 둔다(이벤트 루프는 약한 참조만 가짐)
 generate_log = logging.getLogger("uvicorn.error")  # verify와 같이 uvicorn 기본 설정에서 찍히는 로거
 
 
@@ -41,6 +42,7 @@ class ChunkTrace:
     attempts: int = 0  # 실제 Gemini 시도 횟수
     error_status: int | None = None
     cancelled_while: str | None = None  # 취소됐을 때 waiting(자리 대기 중) / running(호출 중)
+    error_kind: str | None = None  # HTTP 실패가 아닌 오류의 종류(예: 취소 정리 중 난 오류). 문장은 남기지 않는다
 
 
 def start() -> None:
@@ -173,6 +175,22 @@ def pick_failure(failures: dict[int, HTTPException]) -> HTTPException:
     return next((e for e in ordered if e.status_code == status.HTTP_429_TOO_MANY_REQUESTS), ordered[0])
 
 
+async def _stop_workers(workers: list[asyncio.Task]) -> list[BaseException]:
+    # 남은 작업자를 취소하고 모두 끝날 때까지 기다린 뒤, 끝난 작업자의 예외를 전부 회수한다
+    # (회수하지 않으면 "Task exception was never retrieved"로 남는다. 취소 정리 중 난 오류는 묶음 로그의 error_kind에 남는다)
+    for w in workers:
+        w.cancel()
+    await asyncio.wait(workers)
+    return [w.exception() for w in workers if not w.cancelled() and w.exception() is not None]
+
+
+def _collect(task: asyncio.Task) -> None:
+    # 부모가 먼저 빠져나가 정리 태스크의 결과를 아무도 받지 않는 경우에도 결과를 회수해 둔다
+    _cleanups.discard(task)
+    if not task.cancelled():
+        task.exception()
+
+
 async def _write_chunks(chunks: list[list[MissionPlace]], traces: list[ChunkTrace]) -> list[MissionBatch]:
     # 요청마다 작업자를 최대 MAX_CONCURRENT_CALLS개만 두고, 작업자가 묶음을 차례로 가져간다
     # (장소가 아주 많아도 태스크가 묶음 수만큼 늘지 않는다). 한 묶음이 실패하면 나머지는 취소하고 전체를 실패로 돌려준다
@@ -206,8 +224,8 @@ async def _write_chunks(chunks: list[list[MissionPlace]], traces: list[ChunkTrac
                     trace.wait_sec = round(time.monotonic() - waiting, 3)
                 trace.status, trace.cancelled_while = "cancelled", trace.status
                 raise
-            except Exception:
-                trace.status = "failed"
+            except Exception as e:
+                trace.status, trace.error_kind = "failed", type(e).__name__
                 raise
 
     # TaskGroup은 쓰지 않는다. 3.12의 TaskGroup은 끝나기를 기다리는 중 자식이 실패하면 부모 태스크에 건 취소를
@@ -217,11 +235,12 @@ async def _write_chunks(chunks: list[list[MissionPlace]], traces: list[ChunkTrac
     try:
         await asyncio.wait(workers, return_when=asyncio.FIRST_EXCEPTION)
     finally:
-        # 묶음 실패·바깥 취소·마감이면 남은 작업자를 취소하고, 정리가 끝날 때까지 기다린다 (다 끝났으면 아무 일도 없다)
-        for w in workers:
-            w.cancel()
-        await asyncio.wait(workers)
-    raised = [w.exception() for w in workers if not w.cancelled() and w.exception() is not None]
+        # 묶음 실패·바깥 취소·마감이면 남은 작업자를 정리한다. 정리는 별도 태스크가 맡아, 정리 중 부모가 또 취소돼
+        # 먼저 빠져나가도 작업자가 끝나고(자리 반납) 예외를 회수할 때까지 간다. 부모가 받던 취소·마감은 그대로 올라간다
+        cleanup = asyncio.create_task(_stop_workers(workers))
+        _cleanups.add(cleanup)
+        cleanup.add_done_callback(_collect)
+        raised = await asyncio.shield(cleanup)
     if bugs := [e for e in raised if not isinstance(e, HTTPException)]:
         # 프로그램 오류가 하나라도 있으면 502·429로 숨기지 않고 그대로 올린다
         raise BaseExceptionGroup("generate 묶음 처리 중 프로그램 오류", bugs)

@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import json
 import re
 
@@ -157,17 +158,44 @@ def _echo(places: list[MissionPlace]) -> MissionBatch:
     ])
 
 
+_real_timeout = asyncio.timeout  # deadline_spy가 asyncio.timeout을 바꿔도 안전 마감은 원래 것을 쓴다
+
+
+async def _within(awaitable, seconds: float = 2):
+    # 순서를 정하는 용도가 아니라, 회귀로 신호가 오지 않을 때 테스트가 멈추지 않고 실패하게 하는 안전 마감
+    async with _real_timeout(seconds):
+        return await awaitable
+
+
+@pytest.fixture
+async def loop_errors():
+    # 이벤트 루프로 새는 오류(예: 회수하지 않은 작업자 예외)를 모은다. 테스트 끝에 비어 있어야 한다
+    loop = asyncio.get_running_loop()
+    caught: list[str] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _, context: caught.append(context["message"]))
+    yield caught
+    gc.collect()  # 회수 안 된 예외는 태스크가 사라질 때 보고된다
+    loop.set_exception_handler(previous)
+    assert caught == []
+
+
 class FakeWriter:
     # write_descriptions 대신 쓴다. 묶음별 동작을 첫 장소 id로 고르고, 동시에 몇 개가 돌았는지 센다
     # 순서는 sleep 시간이 아니라 Event로 정한다: all_running(묶음 n개가 호출 중) / release(테스트가 풀어 줌)
-    def __init__(self, outcomes: dict | None = None, hold: bool = False, expect_running: int = 3):
+    def __init__(self, outcomes: dict | None = None, hold: bool = False, expect_running: int = 3,
+                 on_cancel: str | None = None):
+        # on_cancel: "fail"(취소 정리 중 오류를 냄) / "slow"(cleanup_release가 풀릴 때까지 정리를 끈다)
         # outcomes: 첫 장소 id → Exception(바로 실패) / ("all_running", e)·("release", e)(그 신호 뒤에 실패)
         # hold: True면 성공 묶음도 취소될 때까지 끝나지 않는다
         self.outcomes = outcomes or {}
         self.hold = hold
         self.expect_running = expect_running
+        self.on_cancel = on_cancel
         self.all_running = asyncio.Event()
         self.release = asyncio.Event()
+        self.cleaning = asyncio.Event()
+        self.cleanup_release = asyncio.Event()
         self.calls: list[int] = []
         self.active = self.max_active = 0
         self.cancelled = 0
@@ -196,6 +224,11 @@ class FakeWriter:
             return _echo(places)
         except asyncio.CancelledError:
             self.cancelled += 1
+            if self.on_cancel == "fail":
+                raise RuntimeError("정리 실패")  # 문장이 로그에 남지 않는지도 본다
+            if self.on_cancel == "slow":
+                self.cleaning.set()
+                await self.cleanup_release.wait()
             raise
         finally:
             self.active -= 1
@@ -332,10 +365,10 @@ async def test_deadline_while_waiting_for_a_slot_is_504_without_calling(writer, 
 async def test_deadline_while_calling_is_504_and_cancels(writer, deadline_spy):
     fake = writer(hold=True)
     task = asyncio.create_task(pipeline_generate.generate_missions(_request(20)))
-    await fake.all_running.wait()
+    await _within(fake.all_running.wait())
     deadline_spy[0].reschedule(asyncio.get_running_loop().time())  # 세 묶음이 호출 중일 때 마감
     with pytest.raises(HTTPException) as exc:
-        await task
+        await _within(task)
     assert exc.value.status_code == 504
     assert fake.cancelled == 3
 
@@ -346,10 +379,10 @@ async def test_outside_cancel_cleans_up_running_chunks(writer):
     fake = writer(hold=True)
     before = len(asyncio.all_tasks())
     task = asyncio.create_task(pipeline_generate.generate_missions(_request(100)))
-    await fake.all_running.wait()
+    await _within(fake.all_running.wait())
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await _within(task)
     assert fake.cancelled == 3
     assert len(fake.calls) == 3  # 차례가 오지 않은 묶음은 시작하지 않았다
     assert len(asyncio.all_tasks()) == before
@@ -365,10 +398,10 @@ async def test_outside_cancel_while_waiting_for_a_slot(writer, caplog):
         await slots.acquire()
     with caplog.at_level("INFO", logger="uvicorn.error"):
         task = asyncio.create_task(pipeline_generate.generate_missions(_request(3)))
-        await slots.someone_waiting.wait()
+        await _within(slots.someone_waiting.wait())
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await _within(task)
     assert fake.calls == []
     [line] = _generate_logs(caplog)
     [chunk] = line["chunks"]
@@ -383,11 +416,11 @@ async def test_outside_cancel_racing_a_chunk_failure_stays_a_cancel(writer):
     # 묶음이 429로 실패하는 순간 바깥 취소가 겹쳐도, 취소를 429로 바꾸지 않는다 (Codex 리뷰에서 재현한 경우)
     fake = writer(outcomes={"p0": ("release", _http(429))}, expect_running=1)
     task = asyncio.create_task(pipeline_generate.generate_missions(_request(3)))
-    await fake.all_running.wait()
+    await _within(fake.all_running.wait())
     fake.release.set()  # 묶음이 먼저 실패하고
     task.cancel()  # 같은 순간 바깥에서 취소한다
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await _within(task)
 
 
 @pytest.mark.anyio
@@ -395,11 +428,11 @@ async def test_deadline_racing_a_chunk_failure_is_504(writer, deadline_spy):
     # 묶음이 502로 실패하는 순간 마감이 겹치면 마감(504)으로 끝낸다 (Codex 리뷰에서 재현한 경우)
     fake = writer(outcomes={"p0": ("release", _http(502))}, expect_running=1)
     task = asyncio.create_task(pipeline_generate.generate_missions(_request(3)))
-    await fake.all_running.wait()
+    await _within(fake.all_running.wait())
     fake.release.set()
     deadline_spy[0].reschedule(asyncio.get_running_loop().time())
     with pytest.raises(HTTPException) as exc:
-        await task
+        await _within(task)
     assert exc.value.status_code == 504
 
 
@@ -450,10 +483,10 @@ async def test_log_for_deadline(writer, caplog, deadline_spy):
     fake = writer(hold=True, expect_running=1)
     with caplog.at_level("INFO", logger="uvicorn.error"):
         task = asyncio.create_task(pipeline_generate.generate_missions(_request(3)))
-        await fake.all_running.wait()
+        await _within(fake.all_running.wait())
         deadline_spy[0].reschedule(asyncio.get_running_loop().time())
         with pytest.raises(HTTPException):
-            await task
+            await _within(task)
     [line] = _generate_logs(caplog)
     assert (line["final_status"], line["error_kind"]) == (504, "미션 문구 생성 시간 초과")
     assert (line["chunks"][0]["status"], line["chunks"][0]["cancelled_while"]) == ("cancelled", "running")
@@ -464,3 +497,39 @@ def test_start_checks_settings_for_scripts(monkeypatch):
     monkeypatch.setattr(settings, "generate_deadline_seconds", float("nan"))
     with pytest.raises(RuntimeError, match="GENERATE_DEADLINE_SECONDS"):
         pipeline_generate.start()
+
+
+@pytest.mark.anyio
+async def test_error_while_cleaning_up_after_cancel_is_retrieved(writer, caplog, loop_errors):
+    # 바깥 취소 뒤 작업자 정리 중 오류가 나도 이벤트 루프로 새지 않고, 요청은 취소로 끝나며 묶음 로그에 종류만 남는다
+    fake = writer(hold=True, expect_running=1, on_cancel="fail")
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        task = asyncio.create_task(pipeline_generate.generate_missions(_request(3)))
+        await _within(fake.all_running.wait())
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await _within(task)
+    [line] = _generate_logs(caplog)
+    assert line["outcome"] == "cancelled"
+    assert (line["chunks"][0]["status"], line["chunks"][0]["error_kind"]) == ("failed", "RuntimeError")
+    assert "정리 실패" not in json.dumps(line, ensure_ascii=False)
+
+
+@pytest.mark.anyio
+async def test_second_cancel_during_cleanup_still_frees_workers_and_slots(writer, loop_errors):
+    # 첫 취소로 작업자가 정리하는 동안 또 취소돼도, 요청은 취소로 끝나고 작업자는 끝까지 정리돼 자리를 돌려준다
+    fake = writer(hold=True, on_cancel="slow")
+    slots = pipeline_generate._call_slots
+    task = asyncio.create_task(pipeline_generate.generate_missions(_request(20)))
+    await _within(fake.all_running.wait())
+    task.cancel()
+    await _within(fake.cleaning.wait())
+    task.cancel()  # 정리 중 두 번째 취소
+    with pytest.raises(asyncio.CancelledError):
+        await _within(task)
+    fake.cleanup_release.set()
+    await _within(asyncio.gather(*pipeline_generate._cleanups))  # 남은 정리가 끝날 때까지
+    assert fake.active == 0 and fake.cancelled == 3
+    for _ in range(pipeline_generate.MAX_CONCURRENT_CALLS):  # 자리 3개가 모두 돌아왔다
+        await _within(slots.acquire(), seconds=0.1)
+    assert not pipeline_generate._cleanups
