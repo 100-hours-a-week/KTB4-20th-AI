@@ -54,6 +54,8 @@ def start() -> None:
 
 
 def close() -> None:
+    # 남은 정리 태스크(_cleanups)는 기다리지 않는다.
+    # 프로세스 종료 시 완료를 보장하지 않으며, 다음 start()는 새 세마포어를 만든다.
     global _call_slots
     _call_slots = None
 
@@ -177,7 +179,8 @@ def pick_failure(failures: dict[int, HTTPException]) -> HTTPException:
 
 async def _stop_workers(workers: list[asyncio.Task]) -> list[BaseException]:
     # 남은 작업자를 취소하고 모두 끝날 때까지 기다린 뒤, 끝난 작업자의 예외를 전부 회수한다
-    # (회수하지 않으면 "Task exception was never retrieved"로 남는다. 취소 정리 중 난 오류는 묶음 로그의 error_kind에 남는다)
+    # (회수하지 않으면 "Task exception was never retrieved"로 남는다. 취소 정리 중 난 오류는 묶음 로그의 error_kind에 남는다.
+    # 단 정리 중 부모가 한 번 더 취소돼 먼저 빠져나가면 요청 로그가 먼저 찍혀, 그 뒤에 난 오류는 회수만 되고 기록되지 않는다)
     for w in workers:
         w.cancel()
     await asyncio.wait(workers)
