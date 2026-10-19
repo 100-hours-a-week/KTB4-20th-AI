@@ -1,6 +1,10 @@
 import asyncio
+import json
+import logging
 import math
+import time
 import uuid
+from dataclasses import asdict, dataclass
 
 import httpx
 from fastapi import HTTPException, status
@@ -24,6 +28,18 @@ MAX_PLACES_PER_CALL = 8  # 10곳 한 번 호출이 최대 19.81초(3번 측정).
 # (서버가 여러 대면 전체 동시 호출은 3 × 대수). 묶음 안 재시도가 끝날 때까지 자리를 잡고 있는다
 MAX_CONCURRENT_CALLS = 3
 _call_slots: asyncio.Semaphore | None = None
+generate_log = logging.getLogger("uvicorn.error")  # verify와 같이 uvicorn 기본 설정에서 찍히는 로거
+
+
+@dataclass
+class ChunkTrace:
+    # 묶음 하나의 기록. status: not_started(차례가 안 옴) / waiting(자리 대기) / running / ok / failed / cancelled
+    places: int
+    status: str = "not_started"
+    wait_sec: float | None = None  # 동시 호출 자리를 기다린 시간
+    call_sec: float | None = None  # 재시도를 포함해 Gemini를 부른 시간
+    attempts: int = 0  # 실제 Gemini 시도 횟수
+    error_status: int | None = None
 
 
 def start() -> None:
@@ -69,7 +85,7 @@ def covers_every_place(batch: MissionBatch, place_count: int) -> bool:
     return numbers == list(range(1, place_count + 1))
 
 
-async def write_descriptions(places: list[MissionPlace]) -> MissionBatch:
+async def write_descriptions(places: list[MissionPlace], trace: dict | None = None) -> MissionBatch:
     # 1. 미션 문구 + scope 생성. 장소 전부를 한 번의 호출로 만든다. mission_id는 여기서 다루지 않는다.
 
     # description은 verify의 mission_description으로 재사용되므로, 사진만 보고 수행 여부를 판단할 수 있어야 한다.
@@ -82,6 +98,7 @@ async def write_descriptions(places: list[MissionPlace]) -> MissionBatch:
             user=build_user_prompt(places),
             response_schema=MissionBatch,
             is_valid=lambda batch: covers_every_place(batch, len(places)),
+            trace=trace,
         )
     except errors.APIError as e:
         if e.code == status.HTTP_429_TOO_MANY_REQUESTS:
@@ -153,7 +170,7 @@ def pick_failure(failures: dict[int, HTTPException]) -> HTTPException:
     return next((e for e in ordered if e.status_code == status.HTTP_429_TOO_MANY_REQUESTS), ordered[0])
 
 
-async def _write_chunks(chunks: list[list[MissionPlace]]) -> list[MissionBatch]:
+async def _write_chunks(chunks: list[list[MissionPlace]], traces: list[ChunkTrace]) -> list[MissionBatch]:
     # 요청마다 작업자를 최대 MAX_CONCURRENT_CALLS개만 두고, 작업자가 묶음을 차례로 가져간다
     # (장소가 아주 많아도 태스크가 묶음 수만큼 늘지 않는다). 한 묶음이 실패하면 나머지는 취소하고 전체를 실패로 돌려준다
     if _call_slots is None:
@@ -165,12 +182,28 @@ async def _write_chunks(chunks: list[list[MissionPlace]]) -> list[MissionBatch]:
 
     async def worker() -> None:
         for index in todo:
-            async with slots:
-                try:
-                    batches[index] = await write_descriptions(chunks[index])
-                except HTTPException as e:
-                    failures[index] = e
-                    raise
+            trace, call = traces[index], {}
+            trace.status, waiting = "waiting", time.monotonic()
+            try:
+                async with slots:
+                    trace.status, started = "running", time.monotonic()
+                    trace.wait_sec = round(started - waiting, 3)
+                    try:
+                        batches[index] = await write_descriptions(chunks[index], trace=call)
+                    finally:
+                        trace.call_sec = round(time.monotonic() - started, 3)
+                        trace.attempts = call.get("attempts", 0)
+                trace.status = "ok"
+            except HTTPException as e:
+                trace.status, trace.error_status = "failed", e.status_code
+                failures[index] = e
+                raise
+            except asyncio.CancelledError:
+                trace.status = "cancelled"
+                raise
+            except Exception:
+                trace.status = "failed"
+                raise
 
     try:
         async with asyncio.TaskGroup() as group:
@@ -191,14 +224,42 @@ async def generate_missions(
     # 장소를 묶음으로 나눠 동시에 만든다. 묶음 대기·호출·재시도를 모두 합쳐 GENERATE_DEADLINE_SECONDS 안에 끝낸다
     # 마감은 취소로 멈추는 방식이라 정확히 그 시각에 끊기지는 않고, Gemini 쪽에서 이미 시작된 생성 비용은 나갈 수 있다
     chunks = split_places(request.places)
+    traces = [ChunkTrace(places=len(chunk)) for chunk in chunks]
+    started = time.monotonic()
+    final_status, outcome, error_kind = 500, "error", None
     try:
-        async with asyncio.timeout(settings.generate_deadline_seconds) as deadline:
-            batches = await _write_chunks(chunks)
-    except TimeoutError as e:
-        if not deadline.expired():  # 마감이 아닌 다른 곳에서 난 TimeoutError는 그대로 올린다
-            raise
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="미션 문구 생성 시간 초과",
-        ) from e
-    return PhotoMissionGenerateResponse(missions=assemble_missions(chunks, batches))
+        try:
+            async with asyncio.timeout(settings.generate_deadline_seconds) as deadline:
+                batches = await _write_chunks(chunks, traces)
+        except TimeoutError as e:
+            if not deadline.expired():  # 마감이 아닌 다른 곳에서 난 TimeoutError는 그대로 올린다
+                raise
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="미션 문구 생성 시간 초과",
+            ) from e
+        response = PhotoMissionGenerateResponse(missions=assemble_missions(chunks, batches))
+        final_status, outcome = 200, "ok"
+        return response
+    except HTTPException as e:
+        final_status, error_kind = e.status_code, e.detail if isinstance(e.detail, str) else type(e).__name__
+        raise
+    except asyncio.CancelledError:
+        outcome = "cancelled"  # 응답을 보내지 않았으니 상태 코드를 지어내지 않는다
+        raise
+    except Exception as e:
+        error_kind = type(e).__name__  # 프로그램 오류. 문장 대신 종류만 남긴다
+        raise
+    finally:
+        # 마감·묶음 크기·동시 상한을 나중에 조정할 수 있게 요청마다 한 줄 남긴다. 장소 이름은 넣지 않는다
+        fields = {
+            "itinerary_id": request.itinerary_id,
+            "places": len(request.places),
+            "chunks": [asdict(trace) for trace in traces],
+            "deadline_sec": settings.generate_deadline_seconds,
+            "total_sec": round(time.monotonic() - started, 3),
+            "final_status": final_status if outcome != "cancelled" else None,
+            "outcome": outcome,
+            "error_kind": error_kind,
+        }
+        generate_log.info("generate %s", json.dumps(fields, ensure_ascii=False))

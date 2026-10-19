@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 
 import pytest
@@ -163,8 +164,10 @@ class FakeWriter:
         self.cancelled = 0
         self.max_tasks = 0
 
-    async def __call__(self, places: list[MissionPlace]) -> MissionBatch:
+    async def __call__(self, places: list[MissionPlace], trace: dict | None = None) -> MissionBatch:
         self.calls.append(len(places))
+        if trace is not None:
+            trace["attempts"] = 1
         outcome = self.outcomes.get(places[0].id)
         if isinstance(outcome, BaseException):
             raise outcome  # 기다리지 않고 바로 실패
@@ -315,3 +318,54 @@ async def test_generate_needs_start(writer):
     pipeline_generate.close()
     with pytest.raises(RuntimeError, match="start"):
         await pipeline_generate.generate_missions(_request(3))
+
+
+def _generate_logs(caplog) -> list[dict]:
+    return [json.loads(r.getMessage().removeprefix("generate ")) for r in caplog.records
+            if r.getMessage().startswith("generate {")]
+
+
+@pytest.mark.anyio
+async def test_log_for_success_has_each_chunk(writer, caplog):
+    writer()
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        await pipeline_generate.generate_missions(_request(20))
+    [line] = _generate_logs(caplog)
+    assert (line["places"], line["final_status"], line["outcome"], line["error_kind"]) == (20, 200, "ok", None)
+    assert [c["places"] for c in line["chunks"]] == [7, 7, 6]
+    assert {c["status"] for c in line["chunks"]} == {"ok"}
+    assert all(c["attempts"] == 1 and c["wait_sec"] is not None and c["call_sec"] is not None for c in line["chunks"])
+    assert line["deadline_sec"] == settings.generate_deadline_seconds and line["total_sec"] > 0
+    assert "장소" not in json.dumps(line, ensure_ascii=False)  # 장소 이름은 남기지 않는다
+
+
+@pytest.mark.anyio
+async def test_log_marks_failed_cancelled_and_not_started_chunks(writer, caplog):
+    # 100곳 = 묶음 13개. 묶음 1이 실패하면 0·2는 취소되고, 나머지 10개는 차례가 오지 않는다
+    writer(delay=1, outcomes={"p8": (0.01, _http(502))})
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(HTTPException):
+        await pipeline_generate.generate_missions(_request(100))
+    [line] = _generate_logs(caplog)
+    statuses = [c["status"] for c in line["chunks"]]
+    assert statuses[:3] == ["cancelled", "failed", "cancelled"]
+    assert set(statuses[3:]) == {"not_started"}
+    assert line["chunks"][1]["error_status"] == 502
+    assert (line["final_status"], line["outcome"], line["error_kind"]) == (502, "error", "fake 502")
+
+
+@pytest.mark.anyio
+async def test_log_for_deadline_and_outside_cancel(writer, caplog, monkeypatch):
+    writer(delay=1)
+    monkeypatch.setattr(settings, "generate_deadline_seconds", 0.05)
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(HTTPException):
+        await pipeline_generate.generate_missions(_request(3))
+    monkeypatch.setattr(settings, "generate_deadline_seconds", 25.0)
+    task = asyncio.create_task(pipeline_generate.generate_missions(_request(3)))
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(asyncio.CancelledError):
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await task
+    deadline, cancelled = _generate_logs(caplog)
+    assert (deadline["final_status"], deadline["error_kind"]) == (504, "미션 문구 생성 시간 초과")
+    assert deadline["chunks"][0]["status"] == "cancelled"
+    assert (cancelled["final_status"], cancelled["outcome"]) == (None, "cancelled")

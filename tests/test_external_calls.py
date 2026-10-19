@@ -361,6 +361,16 @@ async def test_success_on_first_try(fake_gemini):
     assert fake.calls == 1
 
 
+async def test_trace_counts_real_attempts_including_retry(fake_gemini):
+    # generate가 묶음별 실제 시도 횟수를 기록할 때 쓴다. 넘기지 않으면(verify) 동작은 그대로다
+    fake_gemini(_api_error(500), VLM_RESULT)
+    trace = {}
+    result = await gemini_client.generate_structured(
+        system="system", user="user", response_schema=VlmResult, trace=trace,
+    )
+    assert result == VLM_RESULT and trace == {"attempts": 2}
+
+
 async def test_429_is_not_retried(fake_gemini):
     fake = fake_gemini(_api_error(429), VLM_RESULT)
     with pytest.raises(errors.APIError) as exc:
