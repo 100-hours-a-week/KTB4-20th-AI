@@ -102,8 +102,88 @@ async def test_gemini_backend_starts_without_vlm_settings(monkeypatch, caplog):
 
 def test_self_backend_summary_shows_model_and_thresholds_without_secrets():
     summary = vlm_client.backend_summary(_settings(vlm_api_key="secret-key"))
-    assert summary == "verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 점수, 기준 성공 80 / 재시도 40 / 랜드마크 50)"
+    assert summary == "verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 점수, 기준 성공 80 / 재시도 40 / 랜드마크 50) · 폴백 없음"
     assert "secret-key" not in summary and "vlm.example.com" not in summary
+
+
+# 1-2. 폴백·운영 시간 설정
+
+FALLBACK = {"verify_model_budget_seconds": 20, "gemini_api_key": "gemini-key"}
+
+
+def test_fallback_settings_pass():
+    assert vlm_client.settings_errors(_settings(**FALLBACK)) == []
+    assert vlm_client.settings_errors(_settings(**FALLBACK, vlm_serving_hours="09:00-17:00")) == []
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"vlm_serving_hours": "09:00-17:00"},  # 운영 시간만 있고 예산 없음
+        {**FALLBACK, "gemini_api_key": ""},  # 폴백할 Gemini 키 없음
+        {**FALLBACK, "gemini_api_key": "  "},
+        {**FALLBACK, "verify_model_budget_seconds": 0},
+        {**FALLBACK, "verify_model_budget_seconds": float("inf")},
+        {**FALLBACK, "verify_model_budget_seconds": float("nan")},
+        {**FALLBACK, "verify_model_budget_seconds": 15},  # Gemini 몫 10초 + 여유를 빼면 자체 모델이 연결도 못 함
+        {**FALLBACK, "vlm_serving_hours": "9:00-17:00"},
+        {**FALLBACK, "vlm_serving_hours": "09:00~17:00"},
+        {**FALLBACK, "vlm_serving_hours": "09:00"},
+        {**FALLBACK, "vlm_serving_hours": "25:00-26:00"},
+        {**FALLBACK, "vlm_serving_hours": "09:60-17:00"},
+        {**FALLBACK, "vlm_serving_hours": "17:00-17:00"},
+        {**FALLBACK, "vlm_serving_hours": "22:00-06:00"},  # 자정 넘는 구간은 지원하지 않음
+    ],
+)
+def test_wrong_fallback_settings_are_reported(overrides):
+    assert vlm_client.settings_errors(_settings(**overrides))
+
+
+def test_fallback_checks_also_run_in_question_format():
+    # 객관식은 점수 기준 검사를 건너뛰지만 폴백 검사는 건너뛰면 안 된다
+    no_thresholds = {"self_success_threshold": None, "self_retry_threshold": None, "self_landmark_threshold": None}
+    assert vlm_client.settings_errors(_settings(vlm_format="question", vlm_serving_hours="09:00-17:00", **no_thresholds))
+    assert vlm_client.settings_errors(_settings(vlm_format="question", **no_thresholds, **FALLBACK)) == []
+
+
+def test_budget_at_the_minimum_passes():
+    least = vlm_client.MIN_GEMINI_START_BUDGET_SECONDS + vlm_client.BUDGET_MARGIN_SECONDS + vlm_client.CONNECT_TIMEOUT
+    assert vlm_client.settings_errors(_settings(**{**FALLBACK, "verify_model_budget_seconds": least})) == []
+
+
+@pytest.mark.parametrize(
+    ("clock", "expected"),
+    [("08:59:59", False), ("09:00:00", True), ("16:59:59", True), ("17:00:00", False), ("00:00:00", False)],
+)
+def test_serving_hours_include_start_exclude_end(clock, expected):
+    from datetime import datetime
+
+    from app.core.time import SERVICE_TIMEZONE
+
+    now = datetime.fromisoformat(f"2026-10-20T{clock}").replace(tzinfo=SERVICE_TIMEZONE)
+    assert vlm_client.in_serving_hours(now, vlm_client.parse_serving_hours("09:00-17:00")) is expected
+
+
+def test_empty_serving_hours_means_always():
+    from datetime import datetime
+
+    from app.core.time import SERVICE_TIMEZONE
+
+    assert vlm_client.parse_serving_hours("  ") is None
+    assert vlm_client.in_serving_hours(datetime(2026, 10, 20, 3, 0, tzinfo=SERVICE_TIMEZONE), None) is True
+
+
+def test_summary_shows_fallback_without_secrets():
+    summary = vlm_client.backend_summary(_settings(**FALLBACK, vlm_serving_hours="09:00-17:00"))
+    assert summary.endswith(" · 폴백 Gemini (모델 단계 예산 20초, 자체 모델 운영 시간 09:00-17:00)")
+    assert "gemini-key" not in summary
+
+
+def test_budget_warning_replaces_self_only_warning():
+    # 폴백을 켜면 모델 단계 상한은 예산이라, 경고도 예산 기준이다
+    assert vlm_client.deadline_warning(_settings(**FALLBACK, vlm_deadline_seconds=25)) is None
+    assert "VERIFY_MODEL_BUDGET_SECONDS=25.5초" in vlm_client.deadline_warning(_settings(**{**FALLBACK, "verify_model_budget_seconds": 25.5}))
+    assert vlm_client.deadline_warning(_settings(**{**FALLBACK, "verify_model_budget_seconds": 20})) is None
 
 
 def test_question_format_needs_no_score_thresholds():
@@ -444,6 +524,83 @@ async def test_lifespan_logs_deadline_warning(monkeypatch, caplog):
         async with lifespan(app):
             pass
     assert "VLM_DEADLINE_SECONDS=25초" in caplog.text
+
+
+# 5-2. 부르는 쪽 마감(deadline)·요청별 기록(trace) — 폴백이 Gemini 몫을 남기려고 쓴다
+
+def _now() -> float:
+    import asyncio
+
+    return asyncio.get_running_loop().time()
+
+
+async def test_earlier_caller_deadline_shortens_the_wait(fake_vlm):
+    server = fake_vlm(slow(5, ok))  # 설정 마감은 60초
+    started = _now()
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=started + 0.3)
+    assert exc.value.status_code == 504
+    assert _now() - started < 2
+    assert len(server.requests) == 1
+
+
+async def test_later_caller_deadline_does_not_extend_the_setting(fake_vlm):
+    fake_vlm(slow(5, ok), vlm_deadline_seconds=0.3)
+    started = _now()
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=started + 60)
+    assert exc.value.status_code == 504
+    assert _now() - started < 2
+
+
+async def test_passed_caller_deadline_sends_nothing(fake_vlm):
+    server = fake_vlm(ok)
+    trace: dict = {}
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=_now() - 1, trace=trace)
+    assert exc.value.status_code == 504
+    assert server.requests == []
+    assert trace["attempts"] == 0
+
+
+async def test_outer_deadline_is_recorded_apart_from_read_timeout(fake_vlm, monkeypatch):
+    # 안전망이 끊은 경우는 원인이 비지 않고 DeadlineExceeded로 남는다(httpx ReadTimeout과 구분)
+    async def stuck(request):
+        await anyio.sleep(5)  # 읽기 시간 초과보다 먼저 안전망이 끊게 httpx 시간 초과를 우회한다
+
+    monkeypatch.setattr(vlm_client, "_attempt", lambda *a, **k: stuck(None))
+    fake_vlm(ok)
+    trace: dict = {}
+    with pytest.raises(HTTPException) as exc:
+        await vlm_client.score(b"jpeg", PLACE, MISSION, deadline=_now() + 0.2, trace=trace)
+    assert exc.value.status_code == 504
+    assert trace["last_error"] == "DeadlineExceeded"
+
+
+async def test_trace_is_filled_per_call_and_does_not_leak(fake_vlm):
+    fake_vlm(status_(500), raise_(httpx.ConnectError), ok)
+    first: dict = {}
+    with pytest.raises(HTTPException):
+        await vlm_client.score(b"jpeg", PLACE, MISSION, trace=first)
+    assert (first["attempts"], first["upstream_status"], first["last_error"]) == (2, None, "ConnectError")
+    assert first["elapsed_sec"] >= 0
+    second: dict = {"attempts": 9, "last_error": "old"}  # 넘긴 dict의 예전 값은 지운다
+    assert await vlm_client.score(b"jpeg", PLACE, MISSION, trace=second) == VLM_RESULT
+    assert (second["attempts"], second["upstream_status"], second["last_error"]) == (1, 200, None)
+    assert "test-key" not in str(first) + str(second) and "vlm.example.com" not in str(first) + str(second)
+
+
+async def test_trace_records_time_even_when_cancelled(fake_vlm):
+    import asyncio
+
+    fake_vlm(slow(5, ok))
+    trace: dict = {}
+    task = asyncio.create_task(vlm_client.score(b"jpeg", PLACE, MISSION, trace=trace))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):  # 취소는 504 등으로 바꾸지 않고 그대로 올라간다
+        await task
+    assert trace["attempts"] == 1 and trace["elapsed_sec"] >= 0
 
 
 async def test_score_without_start_raises():

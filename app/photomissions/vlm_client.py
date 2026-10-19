@@ -3,6 +3,8 @@
 import asyncio
 import base64
 import math
+import re
+from datetime import datetime, time
 from typing import NoReturn
 from urllib.parse import urlparse
 
@@ -35,9 +37,43 @@ DEADLINE_WARN_SECONDS = 20.0
 # 바깥 안전망은 마감보다 조금 늦게 둔다. 마감 경계에서는 httpx 시간 초과가 먼저 나서 원인별 코드(503·502·504)가 남는다
 # 이벤트 루프가 오래 멈추면 안전망이 먼저 날 수 있고, 그때는 504다
 DEADLINE_GUARD = 0.1
+# 폴백 예산(VERIFY_MODEL_BUDGET_SECONDS) 안에서 Gemini 몫으로 남겨 둘 시간. 자체 모델은 이만큼 덜 기다린다
+# 임시값: Gemini Pro 판정 평균 10.9초(dev)는 평균이라 상한이 아니다. 운영 로그의 gemini_sec 분포를 보고 조정한다
+MIN_GEMINI_START_BUDGET_SECONDS = 10.0
+BUDGET_MARGIN_SECONDS = 0.5  # 시간 계산 사이의 여유. 자체 모델 안전망(DEADLINE_GUARD)보다 커야 Gemini 몫이 줄지 않는다
+_HOURS = re.compile(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})")
 
 _client: httpx.AsyncClient | None = None
 _settings: Settings | None = None
+
+
+def parse_serving_hours(text: str) -> tuple[time, time] | None:
+    # "09:00-17:00" → (09:00, 17:00). 빈 값은 None(시간 제한 없음). 형식·범위가 틀리면 ValueError
+    # 자정을 넘는 구간(22:00-06:00)은 지금 운영(낮 시간)에 필요 없어서 조용히 잘못 처리하지 않도록 거부한다
+    if not text.strip():
+        return None
+    match = _HOURS.fullmatch(text.strip())
+    if not match:
+        raise ValueError("VLM_SERVING_HOURS는 HH:MM-HH:MM 형식이어야 함 (예: 09:00-17:00)")
+    h1, m1, h2, m2 = (int(v) for v in match.groups())
+    if not (h1 < 24 and h2 < 24 and m1 < 60 and m2 < 60):
+        raise ValueError("VLM_SERVING_HOURS의 시각이 범위를 벗어남")
+    start, end = time(h1, m1), time(h2, m2)
+    if start >= end:
+        raise ValueError("VLM_SERVING_HOURS는 시작이 끝보다 빨라야 함 (자정을 넘는 구간은 지원하지 않음)")
+    return start, end
+
+
+def in_serving_hours(now: datetime, hours: tuple[time, time] | None) -> bool:
+    # now는 한국 시간(SERVICE_TIMEZONE)이어야 한다. 시작 포함, 끝 제외
+    if hours is None:
+        return True
+    start, end = hours
+    return start <= now.time() < end
+
+
+def fallback_enabled(s: Settings) -> bool:
+    return s.verify_backend == "self" and s.verify_model_budget_seconds is not None
 
 
 def settings_errors(s: Settings) -> list[str]:
@@ -52,6 +88,7 @@ def settings_errors(s: Settings) -> list[str]:
     deadline = s.vlm_deadline_seconds
     if deadline is None or not math.isfinite(deadline) or deadline <= 0:  # inf면 마감이 사라지고 nan은 비교가 안 된다
         errors.append("VLM_DEADLINE_SECONDS는 0보다 큰 유한한 수여야 함")
+    errors += _fallback_errors(s)
 
     if s.vlm_format == "question":  # 객관식은 점수 기준 대신 등급 규칙을 쓴다
         return errors
@@ -67,6 +104,31 @@ def settings_errors(s: Settings) -> list[str]:
     return errors
 
 
+def _fallback_errors(s: Settings) -> list[str]:
+    # 폴백·운영 시간 설정. 형식(score/question)과 상관없이 검사한다
+    errors = []
+    try:
+        hours = parse_serving_hours(s.vlm_serving_hours)
+    except ValueError as e:
+        errors.append(str(e))
+        hours = None
+    budget = s.verify_model_budget_seconds
+    if budget is None:
+        if hours is not None or s.vlm_serving_hours.strip():
+            # 운영 시간 밖 요청을 Gemini로 보내려면 그 경로도 전체 마감 안에서 돌아야 한다
+            errors.append("VLM_SERVING_HOURS를 쓰려면 VERIFY_MODEL_BUDGET_SECONDS도 필요함")
+        return errors
+    if not math.isfinite(budget) or budget <= 0:
+        errors.append("VERIFY_MODEL_BUDGET_SECONDS는 0보다 큰 유한한 수여야 함")
+    elif budget - MIN_GEMINI_START_BUDGET_SECONDS - BUDGET_MARGIN_SECONDS < CONNECT_TIMEOUT:
+        # Gemini 몫을 빼고 나면 자체 모델이 연결조차 못 할 만큼 짧다
+        least = MIN_GEMINI_START_BUDGET_SECONDS + BUDGET_MARGIN_SECONDS + CONNECT_TIMEOUT
+        errors.append(f"VERIFY_MODEL_BUDGET_SECONDS는 {least:g}초 이상이어야 함 (Gemini 몫 {MIN_GEMINI_START_BUDGET_SECONDS:g}초를 남김)")
+    if not s.gemini_api_key.strip():
+        errors.append("폴백(VERIFY_MODEL_BUDGET_SECONDS)을 쓰려면 GEMINI_API_KEY가 필요함")
+    return errors
+
+
 def check_settings(s: Settings) -> None:
     if errors := settings_errors(s):
         raise RuntimeError("VERIFY_BACKEND=self 설정 오류: " + " / ".join(errors))
@@ -74,6 +136,14 @@ def check_settings(s: Settings) -> None:
 
 def deadline_warning(s: Settings) -> str | None:
     # 백엔드 읽기 타임아웃(30초)은 AI 서버가 모르는 외부 값이라 시작을 막지 않고 경고만 한다
+    # 폴백을 켜면 모델 단계 전체 상한은 예산이고, 끄면 자체 모델 단독 대기(VLM_DEADLINE_SECONDS)다
+    if fallback_enabled(s) and s.verify_model_budget_seconds is not None:
+        if s.verify_model_budget_seconds > DEADLINE_WARN_SECONDS:
+            return (
+                f"VERIFY_MODEL_BUDGET_SECONDS={s.verify_model_budget_seconds:g}초가 {DEADLINE_WARN_SECONDS:g}초보다 큼. "
+                "백엔드는 30초까지만 기다리므로 사진 다운로드·축소 시간을 더하면 판정 결과를 받기 전에 끊길 수 있음"
+            )
+        return None
     if s.verify_backend == "self" and s.vlm_deadline_seconds is not None and s.vlm_deadline_seconds > DEADLINE_WARN_SECONDS:
         return (
             f"VLM_DEADLINE_SECONDS={s.vlm_deadline_seconds:g}초가 {DEADLINE_WARN_SECONDS:g}초보다 큼. "
@@ -87,15 +157,22 @@ def backend_summary(s: Settings) -> str:
     if s.verify_backend != "self":
         return "verify 판정 백엔드: gemini"
     if s.vlm_format == "question":
-        return (
+        return _with_fallback(s, (
             f"verify 판정 백엔드: self (모델 {s.vlm_model}, 마감 {s.vlm_deadline_seconds:g}초, "
             "형식 객관식, 등급 규칙 rule_grade: 판단 불가·다른 장소·대상 없음 실패 / 대상 부족·조건 안 지킴·장소 모름 재시도)"
-        )
-    return (
+        ))
+    return _with_fallback(s, (
         f"verify 판정 백엔드: self (모델 {s.vlm_model}, 마감 {s.vlm_deadline_seconds:g}초, 형식 점수, "
         f"기준 성공 {s.self_success_threshold:g} / 재시도 {s.self_retry_threshold:g} / "
         f"랜드마크 {s.self_landmark_threshold:g})"
-    )
+    ))
+
+
+def _with_fallback(s: Settings, summary: str) -> str:
+    if not fallback_enabled(s) or s.verify_model_budget_seconds is None:
+        return summary + " · 폴백 없음"
+    hours = s.vlm_serving_hours.strip() or "제한 없음"
+    return summary + f" · 폴백 Gemini (모델 단계 예산 {s.verify_model_budget_seconds:g}초, 자체 모델 운영 시간 {hours})"
 
 
 # 클라이언트 수명 — 앱이 켜질 때 하나 만들어 꺼질 때까지 재사용한다
@@ -245,17 +322,26 @@ def _can_retry(remaining: float) -> bool:
     return remaining > 0 and remaining > CONNECT_TIMEOUT
 
 
-async def score(image_bytes: bytes, place_name: str, mission_description: str) -> VlmResult | QuestionAnswer:
+async def score(
+    image_bytes: bytes, place_name: str, mission_description: str,
+    *, deadline: float | None = None, trace: dict | None = None,
+) -> VlmResult | QuestionAnswer:
     # 재시도까지 합쳐 VLM_DEADLINE_SECONDS 안에 끝낸다. 마감은 여기 들어온 순간부터 잰다 (사진 받기·줄이기 제외)
     # VLM_FORMAT에 따라 점수(VlmResult) 또는 객관식 답(QuestionAnswer)을 돌려준다. 등급은 pipeline_verify가 정한다
+    # deadline: 폴백을 쓰는 쪽이 정한 절대 마감(이벤트 루프 시계, loop.time() 기준). 설정 마감과 더 이른 쪽을 쓴다
+    # trace: 요청마다 새로 만든 dict를 넘기면 시도 횟수·마지막 상대 상태·원인·걸린 시간을 거기에 남긴다(성공·실패·취소 모두)
     client, s = get_client()
     payload = build_payload(s.vlm_model, image_bytes, place_name, mission_description, s.vlm_format)
     schema = FORMATS[s.vlm_format][1]
     loop = asyncio.get_running_loop()
     started = loop.time()  # 시스템 시계가 바뀌어도 흔들리지 않는 시계
-    deadline = started + float(s.vlm_deadline_seconds or 0)
-    trace: dict = {"attempts": 0, "upstream_status": None, "last_error": None}
+    own_deadline = started + float(s.vlm_deadline_seconds or 0)
+    deadline = own_deadline if deadline is None else min(own_deadline, deadline)
+    trace = {} if trace is None else trace
+    trace.update(attempts=0, upstream_status=None, last_error=None)
     try:
+        if deadline - started <= 0:  # 부르는 쪽 마감이 이미 지났으면 요청을 시작하지 않는다
+            raise TimeoutError
         # 마감(deadline)은 한 번만 정하고 재시도 때 다시 계산하지 않는다. 바깥 안전망만 DEADLINE_GUARD만큼 늦다
         async with asyncio.timeout_at(deadline + DEADLINE_GUARD):
             while True:
@@ -265,10 +351,12 @@ async def score(image_bytes: bytes, place_name: str, mission_description: str) -
                 except _Retryable as e:
                     if trace["attempts"] >= MAX_ATTEMPTS or not _can_retry(deadline - loop.time()):
                         raise e.error from e.__cause__  # 재시도를 못 하면 원래 원인(502) 그대로
-    except TimeoutError as e:  # 바깥 안전망이 요청을 끊음
+    except TimeoutError as e:  # 바깥 안전망이 요청을 끊음(또는 부르는 쪽 마감이 이미 지남)
+        trace["last_error"] = "DeadlineExceeded"  # httpx 읽기 시간 초과(ReadTimeout)와 구분한다
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과",
         ) from e
     finally:
         # 키·사진·서버 주소는 남기지 않는다
-        sentry_sdk.set_context("vlm", {**trace, "elapsed_sec": round(loop.time() - started, 3)})
+        trace["elapsed_sec"] = round(loop.time() - started, 3)
+        sentry_sdk.set_context("vlm", dict(trace))
