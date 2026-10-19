@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     internal_service_token: str = ""
     allowed_image_hosts: str = ""  # 쉼표로 구분한 허용 호스트 목록 (SSRF 방지)
     google_places_api_key: str = ""
+    kma_api_key: str = ""  # 기상청(공공데이터포털) 단기·중기 예보 인증키. 비어 있으면 precheck가 503 (ADR-0009)
+    kma_timeout_seconds: float = 10.0  # 기상청 호출 한 번의 대기 시간
+    precheck_cache_ttl_seconds: float = 1800.0  # 예보 캐시 유효 시간. 06시 트리거가 몰려도 같은 예보를 한 번만 받는다
     db_host: str = "localhost"
     db_port: int = 3306
     db_user: str = ""

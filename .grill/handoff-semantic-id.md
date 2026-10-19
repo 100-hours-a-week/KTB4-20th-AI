@@ -39,7 +39,7 @@ PR 3 머지 뒤에도 할 일
 3. 모델 경로 운영 활성화 결정과 환경변수 배포. 쓰지 않으면 엔드포인트 삭제, 키 폐기, Docker Hub 토큰·이미지 정리
 4. 재생성 요청: 같은 요청이면 같은 일정이라 재생성이 해결되지 않는다(ADR-0007의 한계). 후속 후보는 요청에 선택 필드 `regenerate_seed` 추가(BE 협의 필요, BE가 재생성 때 무엇을 보내는지는 확인하지 못함). 새 요청 스키마(PR 3)와 함께 협의하는 것을 추천
 5. 선택: 큰 모델 B를 Recall@10으로 평가(기준을 먼저 정한다: 서비스 조건 개발용 Recall@10 차이의 신뢰구간 하한 > 0), 새 평가 파일의 MANIFEST 추가
-6. precheck 구현(기상청 API, 판정 기준, 배치, `region` 제거): 이번 범위 밖이며 코드는 기상청 격자 변환(`precheck.py`)뿐이다. place-selection은 precheck 응답과 같은 모양의 `external_factors`를 받기만 한다
+6. precheck: `feat/precheck` 브랜치에서 구현했다(ADR-0009 Proposed, 단기·중기 예보, 요청 때 계산 + 30분 메모리 캐시, `POST /trips/precheck`). 응답은 `{status_code, data}` 구조로 확정했다. 배포 서버에서 확인할 목록(BE의 봉투·새 `detail` 값·빠진 날짜·503 처리 포함)은 ADR-0009의 준수 확인에 있다. 06시 시점의 중기 발표분 수신과 판정 기준 숫자는 운영하며 확인한다
 7. 최종 발표 자료: A4 보고서(Claude Docs 아티팩트로 만든 적 있음)와 `docs/trips/place-selection-evolution.md`, `docs/trips/semantic-id-glossary.md`를 활용
 
 ### 다음 세션 재개 방법
