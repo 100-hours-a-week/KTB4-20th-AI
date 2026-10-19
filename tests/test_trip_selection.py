@@ -1,13 +1,15 @@
 import random
-from types import SimpleNamespace
 
 import pytest
 
 from app.trips.schemas.schemas import (
+    Display_Name,
     E_Breaker,
     E_Preference,
     E_Region,
+    Location,
     Member_Survey,
+    Place,
     User,
 )
 from app.trips.services import trip_rule
@@ -19,6 +21,13 @@ from app.trips.services.trip_rule import OUTDOOR_TYPE_VALUES
 MEMBERS = [Member_Survey(user=User(user_id="u"), survey_result=[5, 5, 5, 4, 4, 4, 3, 3, 3, 5, 2, 2, 1, 1, 1])]
 NIGHT_OFF_MEMBERS = [Member_Survey(user=User(user_id="u"), survey_result=[5, 5, 5, 4, 4, 4, 3, 3, 3, 1, 2, 2, 1, 1, 1])]
 PER_CATEGORY = 40
+
+
+def make_place(place_id):
+    return Place(
+        id=place_id, displayName=Display_Name(text=place_id, languageCode="ko"),
+        location=Location(latitude=37.5, longitude=127.0), types=[], rating=4.5, userRatingCount=100,
+    )
 
 
 def _plan(num_days, members=MEMBERS, diversity=False):
@@ -42,9 +51,7 @@ class FakeDb:
             return []
         else:
             count, name = PER_CATEGORY, category.value
-        return [
-            SimpleNamespace(id=f"{name}{i}", matched_preferences=[], selected_for=[]) for i in range(min(count, limit))
-        ]
+        return [make_place(f"{name}{i}") for i in range(min(count, limit))]
 
 
 def _ids(trip):
