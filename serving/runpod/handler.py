@@ -3,6 +3,10 @@
 요청: {"input": {"header": [토큰...], "slots": [[google_place_id...] × 슬롯 수], "width": 10}}
 응답: {"places": [슬롯마다 고른 google_place_id 또는 null]}
 
+여러 날 요청(ADR-0008): {"input": {"header": [...], "pools": {"이름": [google_place_id...]}, "days": [[슬롯별 풀 이름...] × 일수],
+  "width": 10, "first_k": 30, "seed": 123}}
+응답: {"days": [[슬롯마다 고른 google_place_id 또는 null] × 일수]}. 일수는 1~9, 하루 슬롯은 1~8개다. 중복 장소는 여행 전체에서 막는다.
+
 모델 가중치(model.onnx)와 코드 사전(codes.json)은 이미지 안 /bundle에 함께 들어 있다. 같은 버전임이 보장되므로
 요청에는 후보 목록만 싣는다. 빔 서치와 후보 제한은 AI 서버 CPU 경로와 같은 함수(generate_itinerary)를 쓴다.
 VLM(Qwen2.5-VL)과는 별도 엔드포인트로 배포한다.
@@ -20,6 +24,7 @@ from app.trips.services.model.generation import (
     BEAM_WIDTH,
     MAX_FIRST_K,
     generate_itinerary,
+    run_trip_request,
 )
 
 BUNDLE = Path(os.environ.get("BUNDLE_DIR", "/bundle"))
@@ -36,6 +41,11 @@ def next_logprobs(prefixes):
 
 def handler(event):
     payload = event.get("input") or {}
+    if "days" in payload:  # 여러 날 일정 (ADR-0008). 후보 풀을 한 번만 싣고 슬롯은 풀 이름으로 가리킨다
+        result = run_trip_request(payload, CODES, next_logprobs)
+        if "error" in result:
+            return result
+        return {**result, "providers": SESSION.get_providers(), "model": BUNDLE_DATA["version"].get("model_sha256", "")[:12]}
     header, slots = payload.get("header"), payload.get("slots")
     if not isinstance(header, list) or not isinstance(slots, list) or not 1 <= len(slots) <= 8:
         return {"error": "header와 slots(1~8개)가 필요함"}

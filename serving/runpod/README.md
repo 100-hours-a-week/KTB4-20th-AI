@@ -43,6 +43,21 @@ RUNPOD_MODEL_API_KEY=<RunPod API 키>
 - 측정(16GB 그룹): 따뜻한 상태 총 1.3초, 90초 유휴 후 첫 요청 10~13초, 요청 크기 15MB까지 성공. 자세한 값은 ADR-0004.
 - 재현: `scripts/make_runpod_payload.py`로 요청 파일을 만들고 `scripts/bench_runpod.py`로 측정한다(호출은 비용이 나가므로 직접 실행, 키는 `.env`에 둔다).
 
+## 여러 날 요청 (ADR-0008)
+
+기존 `slots` 요청은 그대로 받는다. `days`가 있으면 여러 날 일정으로 처리한다. 후보 풀을 이름 붙여 한 번만 보내고 슬롯은 풀 이름으로 가리키므로, 요청 크기가 일수에 비례하지 않는다.
+
+```
+{"input": {"header": [1,3,5,7,9,11],
+           "pools": {"daytime": ["<google_place_id>", ...], "food": ["<google_place_id>", ...]},
+           "days": [["daytime","food","daytime","daytime","food"], ["daytime","food"]],
+           "width": 10, "first_k": 30, "seed": 123}}
+```
+
+- 응답: `{"days": [[슬롯마다 고른 google_place_id 또는 null] × 일수], "providers": [...], "model": "..."}`. 입력이 틀리면 `{"error": "..."}`다.
+- 일수는 1~9, 하루 슬롯은 1~8개다. 일자마다 문맥을 처음부터 시작하고, 이미 쓴 장소는 여행 전체에서 후보에서 뺀다. 첫 장소 무작위의 시드는 일자마다 `seed + 일자 번호(0부터)`다.
+- 이 요청은 이 형식을 아는 이미지부터 처리한다. 이전 이미지(v2)는 `days`를 모르고 오류 응답을 돌려주므로, AI 서버가 이를 실패로 보고 CPU나 규칙으로 되돌린다.
+
 ## 동작 확인과 벤치마크
 
 ```
