@@ -6,6 +6,7 @@ from tests.constants import (
     TOMORROW,
     VALID_MEMBERS,
     YESTERDAY,
+    Service_Date_Offset,
     resolve_date_value,
 )
 
@@ -76,7 +77,7 @@ class TestRegion:
         error_locations = [error['loc'][-1] for error in response.json()['detail']]
         assert "region" in error_locations, response.json()
 
-# ---------------- 2. 여행 기간 (v1에는 하루용) ----------------
+# ---------------- 2. 여행 기간 (최대 8박 9일) ----------------
 class TestPeriod:
     # 1. 고정 파라미터 작성
     REGION = E_Region.SEOUL.value
@@ -97,6 +98,8 @@ class TestPeriod:
     @pytest.mark.parametrize("start_date_value, end_date_value", [
         pytest.param(TODAY, TODAY, id="today_single_day"),
         pytest.param(TOMORROW, TOMORROW, id="future_single_day"),
+        pytest.param(TODAY, Service_Date_Offset(1), id="two_days"),
+        pytest.param(TODAY, Service_Date_Offset(8), id="nine_days_max"),
     ])
     def test_period_valid(self, test_client, request_headers, start_date_value, end_date_value):
         response = test_client.post(
@@ -111,6 +114,7 @@ class TestPeriod:
         # 비즈니스 규칙 위반
         pytest.param(YESTERDAY, YESTERDAY, None, "start_date", id="start_in_past"),
         pytest.param(TOMORROW, TODAY, None, "end_date", id="end_before_start"),
+        pytest.param(TODAY, Service_Date_Offset(9), None, "end_date", id="ten_days_over_max"),
 
         # 구문 위반
         pytest.param("wrong_format", TODAY, None, "start_date", id="start_wrong_format"),
@@ -315,7 +319,7 @@ class TestInternalFactors:
         )
         self.assert_validation_error(response, "members")
 
-# ---------------- 4. 외부 요인 (보류, v1에는 없음) ----------------
+# ---------------- 4. 외부 요인 (precheck 응답을 그대로 전달, 신호 처리는 tests/test_place_selection_route.py) ----------------
 class TestExternalFactors:
     pass
     
@@ -366,22 +370,28 @@ class TestCombination:
 
         response = test_client.post(PLACE_SELECTION_URL, json=request_body, headers=request_headers)
         assert response.status_code == 200, response.json()
-        places = response.json()["data"]["places"]
+        plans = response.json()["data"]["places"]
 
-        # 2. invariant 1: 반환 장소 수는 5 또는 6
-        assert len(places) in (5, 6), [place["matched_preferences"] for place in places]
+        # 2. 3개 안 [0] 규칙, [1] 취향, [2] 다양성 (당일치기라 안마다 하루 일정 하나)
+        assert len(plans) == 3, plans
+        for plan in plans:
+            assert len(plan) == 1, plan
+            places = plan[0]
 
-        # 3. invariant 2: 점심(2번째), 저녁(5번째)은 FOOD
-        assert E_Preference.FOOD.value in places[1]["matched_preferences"], places[1]
-        assert E_Preference.FOOD.value in places[4]["matched_preferences"], places[4]
+            # 3. invariant 1: 반환 장소 수는 5 또는 6
+            assert len(places) in (5, 6), [place["matched_preferences"] for place in places]
 
-        # 4. invariant 3: 회피 조건 type을 가진 장소 없음
-        excluded_types: set[str] = set()
-        for breaker_value in deal_breakers_value:
-            excluded_types |= DIRECT_EXCLUDE_MAP.get(E_Breaker(breaker_value), set())
-        for place in places:
-            assert not excluded_types & set(place["types"]), place
+            # 4. invariant 2: 점심(2번째), 저녁(5번째)은 FOOD
+            assert E_Preference.FOOD.value in places[1]["matched_preferences"], places[1]
+            assert E_Preference.FOOD.value in places[4]["matched_preferences"], places[4]
 
-        # 5. invariant 4: 장소 중복 없음
-        place_ids = [place["id"] for place in places]
-        assert len(place_ids) == len(set(place_ids)), place_ids
+            # 5. invariant 3: 회피 조건 type을 가진 장소 없음
+            excluded_types: set[str] = set()
+            for breaker_value in deal_breakers_value:
+                excluded_types |= DIRECT_EXCLUDE_MAP.get(E_Breaker(breaker_value), set())
+            for place in places:
+                assert not excluded_types & set(place["types"]), place
+
+            # 6. invariant 4: 장소 중복 없음
+            place_ids = [place["id"] for place in places]
+            assert len(place_ids) == len(set(place_ids)), place_ids

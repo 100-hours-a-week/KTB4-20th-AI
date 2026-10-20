@@ -1,0 +1,42 @@
+# 포토미션 verify 학습 시험 (2026-10-13 Pod). 목적은 성능이 아니라 학습이 끝까지 돌아가는지 확인하는 것
+# 데이터: scripts/build_train_dataset.py가 만든 파일럿 56개 (객관식 형식, scripts/question_format.py)
+# 실행: llamafactory-cli train scripts/train/qwen2_5vl_lora_smoke.yaml
+# 매개변수 이름·데이터 형식은 LLaMA-Factory 커밋 1fded91(0.9.6.dev0)의 소스와 대조해 확인함(2026-10-11). Pod에서도 이 커밋으로 설치할 것
+
+### 모델
+model_name_or_path: Qwen/Qwen2.5-VL-7B-Instruct
+image_max_pixels: 1048576  # 1024 x 1024. 서비스 normalize_image(긴 변 1024)와 같은 크기로 학습
+trust_remote_code: true
+
+### 방법: LoRA, 비전 인코더는 그대로 두고 언어 쪽만 학습
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
+freeze_vision_tower: true
+
+### 데이터
+dataset: photomission_pilot
+dataset_dir: /workspace/dataset_pilot  # Pod 네트워크 볼륨 경로. 학습이 끝나면 사진(images/)을 지운다
+template: qwen2_vl
+cutoff_len: 4096  # 사진 1장 약 1,300토큰 + 지시문 약 700토큰 + 답 약 30토큰
+preprocessing_num_workers: 4
+overwrite_cache: true
+
+### 저장
+output_dir: /workspace/out/qwen2_5vl_lora_smoke
+logging_steps: 1
+save_strategy: epoch
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### 학습: 56개 × 3번. 1 step = 4개라 약 42 step
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true

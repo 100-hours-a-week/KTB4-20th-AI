@@ -83,4 +83,4 @@ class MissionDescription(BaseModel):
 
 
 class MissionBatch(BaseModel):
-    missions: list[MissionDescription]  # 장소 전부의 미션을 한 번의 호출로 받는다
+    missions: list[MissionDescription]  # 묶음 하나(장소 최대 8곳)의 미션을 한 번의 호출로 받는다
