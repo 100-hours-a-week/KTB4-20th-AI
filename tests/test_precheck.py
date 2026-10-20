@@ -321,6 +321,7 @@ def test_the_precheck_response_can_be_forwarded_as_external_factors(kma):
 def test_precheck_endpoint_returns_the_envelope_503_and_requires_the_token(kma, monkeypatch):
     monkeypatch.setattr(settings, "internal_service_token", "t")
     monkeypatch.setattr(precheck_service, "_cache", ForecastCache())
+    monkeypatch.setattr(trips_router, "build_precheck", lambda: build_precheck(NOW))  # 가짜 예보가 NOW 기준 날짜라 시계도 NOW로 고정한다
     client = TestClient(app)
     headers = {"x-internal-token": "t"}
     assert client.post("/trips/precheck").status_code == 401
