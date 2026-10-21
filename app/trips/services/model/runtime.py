@@ -25,7 +25,7 @@ def get_router() -> InferenceRouter:
     if settings.model_dir:
         cpu = LocalEngine(Path(settings.model_dir), settings.model_cpu_max_concurrency)
     if gpu is None and cpu is None:
-        raise RuntimeError("place_selection_mode=model인데 model_dir도 runpod_model_url도 없음")
+        raise RuntimeError("model_dir도 runpod_model_url도 없어 모델 추론 경로를 만들 수 없음")
     breaker = CircuitBreaker(settings.model_breaker_failures, settings.model_breaker_cooldown_seconds)
     logger.info("모델 추론 경로: gpu=%s cpu=%s", gpu is not None, cpu is not None)
     return InferenceRouter(gpu, cpu, breaker)

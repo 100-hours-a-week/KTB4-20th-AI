@@ -28,7 +28,6 @@ docker push <레지스트리>/place-model-runpod:v1
 ## AI 서버 환경변수
 
 ```
-PLACE_SELECTION_MODE=model
 MODEL_DIR=/models/place_model_v1        # CPU 경로용 묶음(컨테이너에 마운트)
 RUNPOD_MODEL_URL=https://api.runpod.ai/v2/<엔드포인트 ID>
 RUNPOD_MODEL_API_KEY=<RunPod API 키>

@@ -1,8 +1,8 @@
 """여행 전체 3개 안을 만든다 (ADR-0008).
 
-  [0] 규칙 경로(평점순). Spring이 재정렬하는 원본이라 항상 규칙으로 만든다.
+  [0] 규칙 경로. 평점 정렬 상위 K곳 중 요청 시드로 고른다(ADR-0011). Spring이 재정렬하는 원본이라 항상 규칙으로 만든다.
   [1] 모델 경로의 취향 안, [2] 모델 경로에 3위·4위 카테고리를 더한 다양성 안.
-      모델을 쓸 수 없거나(규칙 모드, 경로 실패) 그 안이 유효하지 않으면 그 안만 규칙 변형으로 채운다. 어느 경우에도 3개 안이 나온다.
+      모델 경로가 실패하거나 그 안이 유효하지 않으면 그 안만 규칙 변형으로 채운다. 어느 경우에도 3개 안이 나온다.
 
 [0]의 DB 조회와 [1], [2]의 후보 조회·모델 호출은 동시에 시작한다. 시드는 요청의 지역, 날짜, 구성원, 이 여행에 해당하는 날씨 신호로만 만든다
 (precheck의 generated_at이나 다른 지역의 신호가 바뀌어도 같은 여행 조건이면 같은 일정이 나온다).
@@ -16,14 +16,20 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from app.core.config import settings
-from app.trips.schemas.api import Place_Selection_Request
-from app.trips.schemas.schemas import E_Breaker, Place
+from app.trips.schemas.api import (
+    E_Route_Strategy,
+    Place_Selection_Request,
+    Place_Selection_Response_Data,
+    Route,
+)
+from app.trips.schemas.schemas import E_Breaker, E_Preference, Place
 from app.trips.services.model.trip_selection import select_trip_by_model
 from app.trips.services.slot_plan import (
     E_Time_Slot,
     Trip_Slot_Plan,
     build_trip_slot_plan,
 )
+from app.trips.services.taste_share import count_taste_and_discovery
 from app.trips.services.trip_rule import select_trip_by_slot_plan
 
 logger = logging.getLogger(__name__)
@@ -81,24 +87,41 @@ def build_trip_plans(
         logger.info("place-selection: model plan=%s route=%s places=%d", label, route, sum(len(day) for day in trip))
         return trip
 
-    use_model = settings.place_selection_mode == "model"
     steps: list[tuple[str, Callable[[], Trip], Callable[[], Trip]]] = [
-        ("plan1", (lambda: model_trip(plan, "plan1", False)) if use_model else (lambda: rule_trip(plan, "plan1")),
-         lambda: rule_trip(plan, "plan1")),
-        ("plan2", (lambda: model_trip(diverse_plan, "plan2", True)) if use_model else (lambda: rule_trip(diverse_plan, "plan2")),
-         lambda: rule_trip(diverse_plan, "plan2")),
+        ("plan1", lambda: model_trip(plan, "plan1", False), lambda: rule_trip(plan, "plan1")),
+        ("plan2", lambda: model_trip(diverse_plan, "plan2", True), lambda: rule_trip(diverse_plan, "plan2")),
     ]
     with ThreadPoolExecutor(max_workers=3) as pool:
-        rule_future = pool.submit(rule_trip, plan)
+        rule_future = pool.submit(rule_trip, plan, "plan0")
         futures = [(label, pool.submit(primary), fallback) for label, primary, fallback in steps]
         results = [rule_future.result()]
         for label, future, fallback in futures:
-            if not use_model:  # 규칙 경로 자체의 실패는 대체할 곳이 없다
-                results.append(future.result())
-                continue
             try:
                 results.append(future.result())
             except Exception:
-                logger.exception("모델 경로 실패, 규칙 변형으로 채움: %s", label)
+                # ERROR 로그는 Sentry 이벤트가 된다. 모델 서버를 못 쓰는 동안 요청마다 이벤트가 쌓이지 않도록 WARNING으로 남긴다
+                logger.warning("모델 경로 실패, 규칙 변형으로 채움: %s", label, exc_info=True)
                 results.append(fallback())
     return results
+
+
+def group_taste_categories(
+    request: Place_Selection_Request, num_days: int, outdoor_excluded_days: frozenset[int],
+) -> frozenset[E_Preference]:
+    """세 안이 공유하는 그룹 취향 상위 2개 주간 카테고리. build_trip_plans와 같은 시드로 같은 순위를 얻는다."""
+    base = trip_seed(request, outdoor_excluded_days)
+    plan = build_trip_slot_plan(request.members, num_days, random.Random(derive_seed(base, "ties")))
+    return frozenset(plan.days[0].daytime_category_ranking[:2])
+
+
+def build_place_selection(
+    request: Place_Selection_Request, deal_breakers: list[E_Breaker], num_days: int, outdoor_excluded_days: frozenset[int],
+) -> Place_Selection_Response_Data:
+    """응답 조립 (ADR-0012). 1안은 places, 2안(PREFERENCE)과 3안(DIVERSITY)은 취향 반영도와 함께 routes에 담는다."""
+    first, preference, diversity = build_trip_plans(request, deal_breakers, num_days, outdoor_excluded_days)
+    taste_categories = group_taste_categories(request, num_days, outdoor_excluded_days)
+    routes = []
+    for strategy, trip in ((E_Route_Strategy.PREFERENCE, preference), (E_Route_Strategy.DIVERSITY, diversity)):
+        preference_count, discovery_count = count_taste_and_discovery(trip, taste_categories)
+        routes.append(Route(strategy=strategy, preference_count=preference_count, discovery_count=discovery_count, days=trip))
+    return Place_Selection_Response_Data(places=first, routes=routes)

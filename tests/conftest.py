@@ -5,6 +5,17 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.main import app
 from app.photomissions import pipeline_generate
+from app.trips.services.model import runtime
+
+
+@pytest.fixture(autouse=True)
+def no_real_model_route(monkeypatch):
+    # 2·3안은 항상 모델 경로(RunPod, 유료)를 먼저 시도한다. .env에 주소가 있어도 테스트가 실제로 부르지 않게 막는다.
+    # 모델 경로를 쓰는 테스트는 runtime.get_router를 직접 바꾼다
+    def unavailable():
+        raise RuntimeError("테스트에서는 모델 추론 경로를 쓰지 않음")
+
+    monkeypatch.setattr(runtime, "get_router", unavailable)
 
 
 @pytest.fixture(scope="session")

@@ -78,9 +78,24 @@ class Place_Selection_Request(BaseModel):
         return members_value
 
 
+class E_Route_Strategy(str, Enum):
+    PREFERENCE = "PREFERENCE"
+    DIVERSITY = "DIVERSITY"
+
+
+class Route(BaseModel):
+    """2·3안 하나. days는 [일자][장소]이고 배열 순서가 방문 순서다.
+    preference_count와 discovery_count는 낮 활동 장소(식당과 저녁 이후 제외)를 센 값이다 (ADR-0012)."""
+    strategy: E_Route_Strategy
+    preference_count: int  # 매칭 카테고리가 그룹 취향 상위 2개에 속하는 곳
+    discovery_count: int  # 속하지 않는 곳(3·4위 카테고리와, 회피 조건으로 후보가 모자라 다음 순위로 보충한 곳)
+    days: list[list[Place]]
+
+
 class Place_Selection_Response_Data(BaseModel):
-    # places[안][일자][장소]. 안: [0] 규칙(Spring이 재정렬하는 원본), [1] 취향, [2] 다양성 (ADR-0008)
-    places: list[list[list[Place]]]
+    # places[일자][장소]: 1안(규칙, Spring이 재정렬하는 원본). routes: 2안 PREFERENCE, 3안 DIVERSITY (ADR-0012)
+    places: list[list[Place]]
+    routes: list[Route]
 
 
 
