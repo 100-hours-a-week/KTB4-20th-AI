@@ -59,6 +59,14 @@ def test_response_is_three_plans_by_day_even_without_a_model_route(client):
     assert plans[1] != plans[0] and plans[2] != plans[0]  # 규칙 변형은 평점순과 다른 조합이다
 
 
+def test_model_fallback_is_logged_as_a_warning_not_an_error(client, caplog):
+    # ERROR 로그는 Sentry 이벤트가 되므로, 모델 서버를 못 쓰는 동안 요청마다 이벤트가 쌓이지 않아야 한다
+    with caplog.at_level("WARNING", logger="app.trips.services.trip_orchestrator"):
+        assert _post(client, _body()).status_code == 200
+    fallbacks = [record for record in caplog.records if "모델 경로 실패, 규칙 변형으로 채움" in record.getMessage()]
+    assert len(fallbacks) == 2 and all(record.levelname == "WARNING" for record in fallbacks)  # [1], [2]안 각각
+
+
 def test_single_day_trip_keeps_the_full_day_template(client):
     plans = _post(client, _body()).json()["data"]["places"]
     assert [len(plan) for plan in plans] == [1, 1, 1] and all(len(plan[0]) in (5, 6) for plan in plans)

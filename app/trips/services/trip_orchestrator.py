@@ -93,6 +93,7 @@ def build_trip_plans(
             try:
                 results.append(future.result())
             except Exception:
-                logger.exception("모델 경로 실패, 규칙 변형으로 채움: %s", label)
+                # ERROR 로그는 Sentry 이벤트가 된다. 모델 서버를 못 쓰는 동안 요청마다 이벤트가 쌓이지 않도록 WARNING으로 남긴다
+                logger.warning("모델 경로 실패, 규칙 변형으로 채움: %s", label, exc_info=True)
                 results.append(fallback())
     return results

@@ -1,6 +1,6 @@
 """여러 날 일정 3개 안의 지연, 안 사이 겹침, 다양성 안의 카테고리 비율을 잰다 (ADR-0008 PR 4).
 
-실제 서비스 흐름(trip_orchestrator.build_trip_plans)을 모델 모드로 그대로 부르고, 모델 호출은 감싸서 시간과 경로를 기록한다.
+실제 서비스 흐름(trip_orchestrator.build_trip_plans)을 그대로 부르고(2·3안은 모델 경로를 먼저 시도), 모델 호출은 감싸서 시간과 경로를 기록한다.
 DB는 .env의 로컬 DB를 조회만 한다. 모델 호출은 둘 중 하나다.
   --model-dir  로컬 CPU(ONNX). 비용이 없다. 지연은 CPU 값이라 GPU 서버 지연(ADR-0008의 p95 15초 기준)으로 쓰지 않는다
   --runpod     RunPod GPU. 유료다. --max-calls(GPU 호출 상한, 요청 한 건이 2번 부른다)를 반드시 주고 사용자가 승인한 값만 쓴다.
