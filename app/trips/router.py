@@ -26,7 +26,7 @@ router = APIRouter(
 @router.post("/place-selection", response_model=Response[Place_Selection_Response_Data])
 def place_selection(request: Place_Selection_Request) -> Response[Place_Selection_Response_Data]:
     """
-    최대 8박 9일의 일정을 3개 안으로 돌려준다 (ADR-0008). places[안][일자][장소]이고, 안은 [0] 규칙(Spring이 재정렬하는 원본),
+    최대 8박 9일의 일정을 3개 안으로 돌려준다 (ADR-0008). places[안][일자][장소]이고, 안은 [0] 규칙(평점 상위 중 시드로 고름, Spring이 재정렬하는 원본),
     [1] 모델 경로의 취향 안, [2] 모델 경로의 다양성 안이다. 모델 경로가 실패하면 그 안을 규칙 변형으로 채운다.
 
     external_factors(precheck 응답)는 요청의 지역과 여행 날짜에 해당하는 has_issue만 읽고, 신호가 있는 날은 야외 후보를 뺀다.
