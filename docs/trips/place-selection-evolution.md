@@ -148,20 +148,18 @@ flowchart TD
     end
     subgraph ON["온라인 (사용자 요청)"]
         BE["백엔드"] --> AI["AI 서버"]
-        AI --> MODE{"PLACE_SELECTION_MODE"}
-        MODE -- "rule (기본)" --> RULE["규칙 경로"]
-        MODE -- "model" --> SLOT["슬롯 계획<br/>FOOD 외 슬롯 후보 = 취향 상위 2개 카테고리<br/>(모자라면 다음 순위 추가)"]
+        AI --> SLOT["슬롯 계획<br/>FOOD 외 슬롯 후보 = 취향 상위 2개 카테고리<br/>(모자라면 다음 순위 추가)"]
         SLOT --> DB["DB 후보 조회<br/>지역 · 품질 필터 · 회피 type"]
         DB --> GPU{"RunPod GPU 호출<br/>20초 제한 · 3회 연속 실패 시 60초 차단"}
         GPU -- "성공" --> OUT["응답: 5~6곳"]
-        GPU -- "실패 · 5곳 미만" --> RULE
+        GPU -- "실패 · 5곳 미만" --> RULE["규칙 경로"]
         RULE --> OUT
     end
     RP -.-> GPU
 ```
 
 - 모델 경로가 실패하거나 5곳 미만이면 사용자는 규칙 경로의 결과를 받는다. 응답은 항상 만들어진다.
-- 켜는 데 필요한 환경변수는 `PLACE_SELECTION_MODE=model`, `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`이고 `MODEL_DIR`은 비운다.
+- 모델 경로에 필요한 환경변수는 `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`이고 `MODEL_DIR`은 비운다. 2·3안은 항상 모델 경로를 먼저 시도한다(ADR-0010, 이전의 `PLACE_SELECTION_MODE`는 제거됨).
 
 ---
 

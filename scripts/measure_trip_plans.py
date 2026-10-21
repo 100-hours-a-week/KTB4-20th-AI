@@ -313,7 +313,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"사전 점검: {message}", flush=True)
         if not ok:
             raise SystemExit("엔드포인트가 작업을 받지 않음. 콘솔에서 Max Workers(일시 정지 해제)와 이미지를 확인한다")
-    settings.place_selection_mode = "model"
     router = make_router(args)
     runtime.get_router = lambda: router
     results = []

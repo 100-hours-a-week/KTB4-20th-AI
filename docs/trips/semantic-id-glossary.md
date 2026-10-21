@@ -78,7 +78,7 @@
 - **GPU 우선 / 폴백**: 기본 경로는 RunPod GPU, 실패하면 CPU 경로(AWS에는 배포하지 않는 가정), 그다음 규칙 경로.
 - **서킷 브레이커**: GPU 호출이 연속 3번 실패하면 60초 동안 GPU를 부르지 않는 장치. GPU 호출 제한은 20초.
 - **`rule_fallback`**: 모델 경로가 실패하거나 5곳 미만이어서 규칙 경로로 응답한 경우.
-- **`PLACE_SELECTION_MODE`**: `rule`(기본) 또는 `model`. `model`일 때 모델 경로를 먼저 시도한다. 켜는 데 `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`가 필요하고 `MODEL_DIR`은 비운다.
+- **`PLACE_SELECTION_MODE`**: 제거된 환경변수(ADR-0010). 이전에는 `rule`(기본) 또는 `model`로 2·3안을 만드는 방법을 갈랐다. 지금은 2·3안을 항상 모델 경로로 만들고, 모델이 실패한 안만 규칙 변형으로 채운다. 모델 경로에는 `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`가 필요하고 `MODEL_DIR`은 비운다. `.env`에 이 키가 남아 있으면 설정 로딩이 실패한다.
 - **GPU 세대 고정**: 최신 세대 GPU는 현재 이미지(CUDA 12.4)에서 첫 요청이 43~48초라, 엔드포인트를 Ada·Ampere 16GB 그룹으로 고정했다.
 
 ## 8. 산출물과 문서

@@ -38,8 +38,8 @@ def _factors(*entries, generated_at="2026-10-10T10:00:03Z"):
 
 @pytest.fixture
 def client(monkeypatch):
+    """모델 경로를 쓸 수 없는 서버(conftest가 get_router를 막는다). 2·3안은 규칙 변형으로 채워진다."""
     monkeypatch.setattr(settings, "internal_service_token", "t")
-    monkeypatch.setattr(settings, "place_selection_mode", "rule")
     monkeypatch.setattr(trip_rule, "get_DB_places_by_category", FakeDb())
     return TestClient(app)
 
@@ -48,7 +48,7 @@ def _post(client, body):
     return client.post("/trips/place-selection", json=body, headers=HEADERS)
 
 
-def test_response_is_three_plans_by_day_even_in_rule_mode(client):
+def test_response_is_three_plans_by_day_even_without_a_model_route(client):
     response = _post(client, _body(days=2))
     assert response.status_code == 200
     plans = response.json()["data"]["places"]
@@ -113,7 +113,6 @@ def test_unrelated_external_changes_do_not_change_the_response(client):
 
 
 def _model_mode(monkeypatch, fake_model):
-    monkeypatch.setattr(settings, "place_selection_mode", "model")
     monkeypatch.setattr(settings, "model_first_place_top_k", 30)
     monkeypatch.setattr(runtime, "get_router", lambda: object())
     monkeypatch.setattr(trip_orchestrator, "select_trip_by_model", fake_model)
