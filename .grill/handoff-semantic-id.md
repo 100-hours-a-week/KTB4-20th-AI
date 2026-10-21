@@ -4,9 +4,9 @@
 
 ## 1. 변동 상태 (이 절만 자주 바뀐다)
 
-- 마지막 갱신: 2026-10-21(#95·#97·#99는 2026-10-19까지 머지됨, 열린 PR: #109 모드 제거, #110 1안 시드, 그 위에 쌓은 응답 구조·취향 반영도 PR). 기준 커밋(`dev`)은 적지 않는다. 아래 점검 명령으로 확인한다
+- 마지막 갱신: 2026-10-21(#95·#97·#99는 2026-10-19까지 머지됨, 열린 PR: #111 응답 구조·취향 반영도. #109 모드 제거와 #110 1안 시드는 2026-10-21 머지됨). 기준 커밋(`dev`)은 적지 않는다. 아래 점검 명령으로 확인한다
 - 마감: 최종 발표·제출·시연은 2026-10-19(월) 빠르면, 20일(화) 늦어도
-- 구현 상태: M1~M5 완료. 모델 경로(Semantic ID 생성 + 후보 제한 빔 서치)와 서빙(RunPod GPU 우선, 실패 시 규칙)이 dev에 들어가 있다. PR #109(리뷰 중, ADR-0010 Proposed)가 머지되면 2·3안은 항상 모델 경로를 먼저 시도하고 실패한 안만 규칙 변형으로 채운다. 머지 전까지 운영 기본값은 규칙(`PLACE_SELECTION_MODE=rule`)이라 사용자가 받는 일정은 규칙 결과다. 서버 반영 여부는 확인하지 못했다
+- 구현 상태: M1~M5 완료. 모델 경로(Semantic ID 생성 + 후보 제한 빔 서치)와 서빙(RunPod GPU 우선, 실패 시 규칙)이 dev에 들어가 있다. PR #109(모드 제거)와 #110(1안 시드)이 2026-10-21 `dev`에 머지됐다(ADR-0010 Proposed, ADR-0011 Accepted). `dev`에서는 2·3안이 항상 모델 경로를 먼저 시도하고 실패한 안만 규칙 변형으로 채우며, 1안은 평점 정렬 상위 10곳 중 시드로 고른다. 이전 운영 기본값은 규칙(`PLACE_SELECTION_MODE=rule`)이었다. `main`으로 올려 서버에 반영됐는지는 확인하지 못했다
 - ADR 상태: 0000 Superseded, 0002~0008 Accepted, **0009 Proposed**(precheck). 0009는 ADR의 "배포 서버 확인 목록"을 실행한 뒤 Accepted로 바꾼다
 - 서빙: 엔드포인트 `zspx96xu5zs7ge`, 이미지 `whale2200d/place-model-runpod:v3`(`days` 요청을 아는 이미지). 사용자가 v3 푸시와 콘솔 교체를 마쳤다고 알렸고 digest는 확인하지 못했다. Active 0, FlashBoot 끔, GPU는 Ada/Ampere 16GB 그룹. **Idle Timeout은 5초로 알고 있었으나 2026-10-19 측정 때 워커가 마지막 사용 뒤 12분 이상 내려가지 않았다(콘솔 값은 확인하지 못함).** 측정을 위해 Max Workers를 2로 열어 둔 상태이며 0으로 되돌렸는지는 확인하지 못했다(사용자가 콘솔에서 변경). **Max Workers가 0이면 엔드포인트가 일시 정지되어 모든 요청을 `409 ENDPOINT_PAUSED`로 거절한다. `/health`는 워커 0개일 때 정상 상태와 구분이 안 되므로 작은 요청 1개로 확인한다(`scripts/measure_trip_plans.py`의 사전 점검).** 운영 활성화에는 `RUNPOD_MODEL_URL`, `RUNPOD_MODEL_API_KEY`만 필요하다(`MODEL_DIR`은 비움, `PLACE_SELECTION_MODE`는 PR #109로 제거). AWS 서버에는 CPU 경로를 배포하지 않는 것으로 가정(폴백 순서 GPU → 규칙). 키 `placemodel-endpoint-1017`(Restricted)은 `.env`에만 있다
 - 평가 결과: 최종용은 2026-10-16에 free 조건으로 한 번 열었다(재실행 금지). 모델 13.8%, 인기순 5.9%, 규칙 2.5%, 5개 지역 비열세 통과. 서비스 조건(top2-slots, 개발용) 모델 5.9%, 규칙 2.4%, 인기순 5.5%로 인기순 대비 차이는 없다. 자세한 수치는 ADR-0003·0005·0006
@@ -20,7 +20,7 @@
 
 - 구현 PR 머지(2026-10-19): #91(핸들러·추론 엔진 `days` 요청), #92(여행 전체 슬롯 계획과 규칙·모델 선택), #93(요청 `external_factors`와 9일 상한, 응답 `places[안][일자][장소]`, 시드, 3개 안 조립 `services/trip_orchestrator.py`). 핸드오프·설계 로그 #94 머지
 - #95 머지: 측정 스크립트 `scripts/measure_trip_plans.py`와 테스트, ADR-0008 Accepted 전환, ADR-0007 Status 이력
-- **응답 계약 변경(ADR-0012, Proposed, 쌓은 PR):** `data.places`는 1안의 `[일자][장소]`(2차원), `data.routes`는 2안 `PREFERENCE`와 3안 `DIVERSITY`이며 안마다 `preference_count`(낮 활동 장소 중 취향 상위 2개 카테고리에 속하는 곳), `discovery_count`(속하지 않는 곳, 보충한 곳 포함), `days`를 갖는다. 백엔드가 새 구조를 읽을 준비가 되기 전에는 배포하지 않는다. 백엔드의 준비 여부는 확인하지 못했다. 이 PR이 머지되기 전까지 아래 "3차원" 서술이 현재 운영 계약이다
+- **응답 계약 변경(ADR-0012, Proposed, PR #111):** `data.places`는 1안의 `[일자][장소]`(2차원), `data.routes`는 2안 `PREFERENCE`와 3안 `DIVERSITY`이며 안마다 `preference_count`(낮 활동 장소 중 취향 상위 2개 카테고리에 속하는 곳), `discovery_count`(속하지 않는 곳, 보충한 곳 포함), `days`를 갖는다. 백엔드가 새 구조를 읽을 준비가 되기 전에는 배포하지 않는다. 백엔드는 1안 변경에 문제가 없고 새 스키마만 맞으면 된다고 알려 왔다(사용자 확인, 2026-10-21). 새 스키마를 이미 읽는지, 합의안과 달라진 두 곳(`preference_count`/`discovery_count`, `DIVERSITY`)을 전달받았는지는 확인하지 못했다. #111이 머지되기 전까지 아래 "3차원" 서술이 `dev`의 현재 계약이다
 - **#93이 머지됐으므로 운영 기본값이 `rule`이던 때에도 place-selection 응답은 이미 3차원이다.** BE가 새 구조를 읽는지는 확인하지 못했다
 - 측정 결과 파일(레포 밖, 어떤 MANIFEST에도 없음) `$V/m3/eval/`: 유효한 것은 `trip_plans_gpu.json`(신호 없음), `trip_plans_gpu_gyeongju2.json`, `trip_plans_gpu_signal3.json`, `trip_plans_gpu_cold.json`. **`trip_plans_gpu_gyeongju.json`, `trip_plans_gpu_signal.json`, `trip_plans_gpu_signal2.json`은 엔드포인트가 일시 정지여서 모델이 한 번도 응답하지 못한 규칙 변형 결과라 쓰면 안 된다**
 - 결정: 안 사이 중복 제거(ADR-0008 대안 4)는 도입하지 않는다(2026-10-19). 겹침 기준 "모든 일자"에는 엄격하게는 미달이다(`[1]` 대 `[0]` 418/420일, `[2]` 대 `[0]` 419/420일)
@@ -28,7 +28,7 @@
 
 남은 일
 1. 사용자: RunPod 콘솔에서 Max Workers를 0으로 되돌리고 Idle Timeout 값을 확인한다. BE가 새 응답 구조(`places[안][일자][장소]`)를 읽는지 확인한다
-2. 모델 경로 운영 반영(ADR-0010, PR #109). v3 배포는 끝났다. 배포 전에 서버에 `RUNPOD_MODEL_URL`·키가 있는지 확인하고, 배포 뒤 `/trips/place-selection`을 호출해 서버 로그(WARNING)에 "모델 경로 실패, 규칙 변형으로 채움"이 없는지 확인한다. 이 로그는 Sentry 이벤트가 되지 않는다
+2. 모델 경로 운영 반영(ADR-0010, PR #109 머지됨, `main` 반영 전). v3 배포는 끝났다. 배포 전에 서버에 `RUNPOD_MODEL_URL`·키가 있는지 확인하고, 배포 뒤 `/trips/place-selection`을 호출해 서버 로그(WARNING)에 "모델 경로 실패, 규칙 변형으로 채움"이 없는지 확인한다. 이 로그는 Sentry 이벤트가 되지 않는다
 3. 열린 항목(`.grill/place-selection-multi-day.md`): 규칙 변형의 K(현재 10, 잠정), 모델 다양성 안의 3위·4위 비율(측정값 41.4~49.0%)과 헤더, `reasons.detail`·`closure_risk` 사용 여부
 4. 선택: 콜드 스타트를 워커 0 확인을 엄격히 한 방식으로 재측정, 두 모델 호출의 직렬 처리 원인 확인
 
@@ -53,7 +53,7 @@
 1. 같은 폴더(`KTB4-20th-AI`)에서 `claude`를 실행한다. 이전 대화를 이어 가려면 `claude --continue`(마지막 세션) 또는 `claude --resume`(목록에서 선택)을 쓴다. 대화가 길어 요약본으로 이어지므로, 새 세션이 낫다면 그냥 `claude`로 시작하고 아래 4번을 말한다
 2. 세션이 시작되면 `CLAUDE.md`의 순서를 따른다: 이 문서 → ADR-0003~0005 → `.grill/attention-based-place-recommendation-tasks.md`의 해당 절. 여러 날 일정 작업이면 추가로 ADR-0006~0009와 `.grill/place-selection-multi-day.md`를 읽는다. 낯선 용어는 `docs/trips/semantic-id-glossary.md`, 설계 변천은 `docs/trips/place-selection-evolution.md`를 읽는다
 3. 상태 점검: `git branch --show-current`, `git status --short`, `git log --oneline -3`, `gh pr list --state open`. 열린 PR이 없는지, 로컬 브랜치가 `dev`가 아니면 `dev`로 옮기고 `git pull`한 뒤 시작한다
-4. 시작 때 사용자에게 줄 말 예: "handoff를 읽고 ADR-0009의 배포 서버 확인 결과와 BE 확인 결과를 점검한 뒤 모델 경로 운영 반영 결정(PR #109 머지 여부)부터 시작하자"
+4. 시작 때 사용자에게 줄 말 예: "handoff를 읽고 ADR-0009의 배포 서버 확인 결과와 BE 확인 결과를 점검한 뒤 모델 경로 운영 반영 결정(ADR-0010 Accepted 전환 여부)부터 시작하자"
 5. 규칙: 승인 전에는 파일 생성·브랜치 생성·푸시를 하지 않는다. 푸시와 PR 생성은 사용자가 요청할 때만 한다. 자기 PR은 머지하지 않는다. RunPod 호출은 유료이니 매번 승인을 받는다. 키는 `.env`에만 둔다
 6. 환경 주의: PR #109 이후에는 `.env`에 `PLACE_SELECTION_MODE`가 남아 있으면 `Settings`가 알 수 없는 키로 거부해 앱과 테스트가 시작되지 않으니 지운다(OS 환경변수는 영향 없음). 테스트는 `tests/conftest.py`가 모델 경로를 막아 실제 RunPod을 부르지 않는다. 전체 조합 테스트(`-m exhaustive`)는 약 25분, 모델 경로 불변식 검사(`scripts/check_model_invariants.py`)는 약 17분이다. 도커 이미지 푸시, 푸시·PR 같은 공개 작업은 자동 모드 분류기가 막을 수 있으니 그때는 사용자에게 `! <명령>`으로 실행해 달라고 한다. 모델 파일을 쓰는 로컬 명령은 `uv run --with onnxruntime --with numpy python -m ...`로 돌린다. `gh pr create` 직후 리뷰어 지정이 GitHub 일시 오류로 실패한 적이 있으니 `gh pr view --json reviewRequests`로 확인한다
 
