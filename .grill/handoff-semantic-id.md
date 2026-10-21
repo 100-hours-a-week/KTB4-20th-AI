@@ -4,7 +4,7 @@
 
 ## 1. 변동 상태 (이 절만 자주 바뀐다)
 
-- 마지막 갱신: 2026-10-21(#95·#97·#99는 2026-10-19까지 머지됨, 열린 PR: #109 모드 제거). 기준 커밋(`dev`)은 적지 않는다. 아래 점검 명령으로 확인한다
+- 마지막 갱신: 2026-10-21(#95·#97·#99는 2026-10-19까지 머지됨, 열린 PR: #109 모드 제거, #110 1안 시드, 그 위에 쌓은 응답 구조·취향 반영도 PR). 기준 커밋(`dev`)은 적지 않는다. 아래 점검 명령으로 확인한다
 - 마감: 최종 발표·제출·시연은 2026-10-19(월) 빠르면, 20일(화) 늦어도
 - 구현 상태: M1~M5 완료. 모델 경로(Semantic ID 생성 + 후보 제한 빔 서치)와 서빙(RunPod GPU 우선, 실패 시 규칙)이 dev에 들어가 있다. PR #109(리뷰 중, ADR-0010 Proposed)가 머지되면 2·3안은 항상 모델 경로를 먼저 시도하고 실패한 안만 규칙 변형으로 채운다. 머지 전까지 운영 기본값은 규칙(`PLACE_SELECTION_MODE=rule`)이라 사용자가 받는 일정은 규칙 결과다. 서버 반영 여부는 확인하지 못했다
 - ADR 상태: 0000 Superseded, 0002~0008 Accepted, **0009 Proposed**(precheck). 0009는 ADR의 "배포 서버 확인 목록"을 실행한 뒤 Accepted로 바꾼다
@@ -20,6 +20,7 @@
 
 - 구현 PR 머지(2026-10-19): #91(핸들러·추론 엔진 `days` 요청), #92(여행 전체 슬롯 계획과 규칙·모델 선택), #93(요청 `external_factors`와 9일 상한, 응답 `places[안][일자][장소]`, 시드, 3개 안 조립 `services/trip_orchestrator.py`). 핸드오프·설계 로그 #94 머지
 - #95 머지: 측정 스크립트 `scripts/measure_trip_plans.py`와 테스트, ADR-0008 Accepted 전환, ADR-0007 Status 이력
+- **응답 계약 변경(ADR-0012, Proposed, 쌓은 PR):** `data.places`는 1안의 `[일자][장소]`(2차원), `data.routes`는 2안 `PREFERENCE`와 3안 `DIVERSITY`이며 안마다 `preference_count`(낮 활동 장소 중 취향 상위 2개 카테고리에 속하는 곳), `discovery_count`(속하지 않는 곳, 보충한 곳 포함), `days`를 갖는다. 백엔드가 새 구조를 읽을 준비가 되기 전에는 배포하지 않는다. 백엔드의 준비 여부는 확인하지 못했다. 이 PR이 머지되기 전까지 아래 "3차원" 서술이 현재 운영 계약이다
 - **#93이 머지됐으므로 운영 기본값이 `rule`이던 때에도 place-selection 응답은 이미 3차원이다.** BE가 새 구조를 읽는지는 확인하지 못했다
 - 측정 결과 파일(레포 밖, 어떤 MANIFEST에도 없음) `$V/m3/eval/`: 유효한 것은 `trip_plans_gpu.json`(신호 없음), `trip_plans_gpu_gyeongju2.json`, `trip_plans_gpu_signal3.json`, `trip_plans_gpu_cold.json`. **`trip_plans_gpu_gyeongju.json`, `trip_plans_gpu_signal.json`, `trip_plans_gpu_signal2.json`은 엔드포인트가 일시 정지여서 모델이 한 번도 응답하지 못한 규칙 변형 결과라 쓰면 안 된다**
 - 결정: 안 사이 중복 제거(ADR-0008 대안 4)는 도입하지 않는다(2026-10-19). 겹침 기준 "모든 일자"에는 엄격하게는 미달이다(`[1]` 대 `[0]` 418/420일, `[2]` 대 `[0]` 419/420일)

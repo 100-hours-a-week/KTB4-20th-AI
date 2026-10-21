@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.core.time import get_service_today
 from app.main import app
+from app.trips.schemas.schemas import E_Google_Place_Type
 from app.trips.services import trip_orchestrator, trip_rule
 from app.trips.services.model import runtime
 from tests.test_trip_selection import FakeDb, make_place
@@ -36,11 +37,23 @@ def _factors(*entries, generated_at="2026-10-10T10:00:03Z"):
     return {"generated_at": generated_at, "forecasts": [{"date": day, "regions": regions} for day, regions in days.items()]}
 
 
+class NightTypedFakeDb(FakeDb):
+    """저녁 이후 풀의 장소에 야간 type을 붙인다. 운영 DB는 저녁 이후 후보에 야간 type을 요구하므로 같은 모양이다."""
+
+    def __call__(self, category, limit, region, excluded_types=None, required_types=None):
+        places = super().__call__(category, limit, region, excluded_types, required_types)
+        if required_types:
+            night = E_Google_Place_Type(min(required_types))
+            for place in places:
+                place.types = [night]
+        return places
+
+
 @pytest.fixture
 def client(monkeypatch):
     """모델 경로를 쓸 수 없는 서버(conftest가 get_router를 막는다). 2·3안은 규칙 변형으로 채워진다."""
     monkeypatch.setattr(settings, "internal_service_token", "t")
-    monkeypatch.setattr(trip_rule, "get_DB_places_by_category", FakeDb())
+    monkeypatch.setattr(trip_rule, "get_DB_places_by_category", NightTypedFakeDb())
     return TestClient(app)
 
 
@@ -48,10 +61,40 @@ def _post(client, body):
     return client.post("/trips/place-selection", json=body, headers=HEADERS)
 
 
+def _plans(payload):
+    """응답 JSON에서 [1안, 2안, 3안]을 각각 [일자][장소]로 꺼낸다."""
+    data = payload["data"]
+    return [data["places"], *(route["days"] for route in data["routes"])]
+
+
+def test_response_has_plan_one_in_places_and_two_routes_with_taste_counts(client):
+    data = _post(client, _body(days=2)).json()["data"]
+    assert len(data["places"]) == 3 and all(isinstance(day, list) for day in data["places"])  # 1안은 [일자][장소]
+    assert [route["strategy"] for route in data["routes"]] == ["PREFERENCE", "DIVERSITY"]
+    for route in data["routes"]:
+        assert set(route) == {"strategy", "preference_count", "discovery_count", "days"}
+        assert len(route["days"]) == 3
+        assert route["preference_count"] >= 0 and route["discovery_count"] >= 0
+
+
+def test_taste_counts_cover_only_daytime_activity_places_and_the_diversity_route_discovers_more(client):
+    routes = _post(client, _body(days=2)).json()["data"]["routes"]
+    for route in routes:
+        counted = [
+            place for day in route["days"] for place in day
+            if "FOOD" not in place["matched_preferences"] and not place["id"].startswith("night")  # 식당과 저녁 이후는 세지 않는다
+        ]
+        assert route["preference_count"] + route["discovery_count"] == len(counted)
+    preference, diversity = routes
+    assert preference["discovery_count"] == 0  # 후보가 충분하면 취향 상위 2개 안에서만 고른다
+    assert diversity["discovery_count"] >= 1  # 3안은 오후2 슬롯을 3·4위 카테고리로 바꾼다
+    assert diversity["preference_count"] < preference["preference_count"]
+
+
 def test_response_is_three_plans_by_day_even_without_a_model_route(client):
     response = _post(client, _body(days=2))
     assert response.status_code == 200
-    plans = response.json()["data"]["places"]
+    plans = _plans(response.json())
     assert len(plans) == 3
     assert all(len(plan) == 3 for plan in plans)  # 3일
     assert all(len(plan[2]) == 2 for plan in plans)  # 마지막 날은 점심까지
@@ -80,7 +123,7 @@ def test_model_fallback_is_logged_as_a_warning_not_an_error(client, caplog):
 
 
 def test_single_day_trip_keeps_the_full_day_template(client):
-    plans = _post(client, _body()).json()["data"]["places"]
+    plans = _plans(_post(client, _body()).json())
     assert [len(plan) for plan in plans] == [1, 1, 1] and all(len(plan[0]) in (5, 6) for plan in plans)
 
 
@@ -153,7 +196,7 @@ def test_model_plans_use_derived_seeds_k_from_settings_and_diversity_for_the_thi
         return _fake_model_trip(trip_plan, "div" if diversity else "pref"), "gpu"
 
     _model_mode(monkeypatch, fake_model)
-    plans = _post(client, _body(days=1)).json()["data"]["places"]
+    plans = _plans(_post(client, _body(days=1)).json())
     assert plans[1][0][0]["id"].startswith("pref") and plans[2][0][0]["id"].startswith("div")
     assert not plans[0][0][0]["id"].startswith(("pref", "div"))  # [0]은 항상 규칙 경로
     assert first_ks == [30, 30]
@@ -175,6 +218,6 @@ def test_model_failure_or_invalid_result_fills_only_that_plan_with_a_rule_varian
     _model_mode(monkeypatch, fake_model)
     response = _post(client, _body(days=2))
     assert response.status_code == 200
-    plans = response.json()["data"]["places"]
+    plans = _plans(response.json())
     assert [len(plan) for plan in plans] == [3, 3, 3]
     assert all(len(plan[0]) >= 5 for plan in plans)  # 두 안 모두 규칙 변형으로 채워졌다

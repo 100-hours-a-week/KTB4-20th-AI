@@ -370,9 +370,10 @@ class TestCombination:
 
         response = test_client.post(PLACE_SELECTION_URL, json=request_body, headers=request_headers)
         assert response.status_code == 200, response.json()
-        plans = response.json()["data"]["places"]
+        data = response.json()["data"]
+        plans = [data["places"], *(route["days"] for route in data["routes"])]
 
-        # 2. 3개 안 [0] 규칙, [1] 취향, [2] 다양성 (당일치기라 안마다 하루 일정 하나)
+        # 2. 3개 안: places(1안 규칙), routes[0](2안 PREFERENCE), routes[1](3안 DIVERSITY) (당일치기라 안마다 하루 일정 하나)
         assert len(plans) == 3, plans
         for plan in plans:
             assert len(plan) == 1, plan
