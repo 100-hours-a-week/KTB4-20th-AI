@@ -51,8 +51,7 @@ class Settings(BaseSettings):
     # generate 한 번의 전체 상한(초). 장소 묶음 대기·호출·재시도를 모두 포함한다. 백엔드 읽기 타임아웃(30초)보다 짧게
     generate_deadline_seconds: float = 25.0
 
-    # 장소 선정 방식. rule(ADR-0000 규칙, 기본) / model(학습한 모델, ADR-0003). 모델 경로가 실패하면 규칙으로 되돌린다
-    place_selection_mode: Literal["rule", "model"] = "rule"
+    # 장소 선정 모델(ADR-0003). 2·3안은 항상 모델 경로로 만들고, 경로가 실패하면 그 안만 규칙 변형으로 채운다(ADR-0010)
     model_dir: str = ""  # model.onnx와 codes.json이 있는 폴더(CPU 경로)
     model_cpu_max_concurrency: int = 2
     model_first_place_top_k: int = 30  # 첫 장소를 모델 상위 K곳 중 무작위로 고른다(ADR-0007). 1이면 모델 1위로 고정

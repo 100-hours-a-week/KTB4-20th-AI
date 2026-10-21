@@ -2,7 +2,6 @@ import json
 
 import pytest
 
-from app.core.config import settings
 from app.trips.schemas.schemas import E_Google_Place_Type, E_Preference, E_Region
 from app.trips.services import trip_orchestrator, trip_rule
 from app.trips.services.model import runtime, trip_selection
@@ -71,7 +70,6 @@ def test_build_cases_is_deterministic_and_respects_the_limit():
 
 @pytest.fixture
 def fake_environment(monkeypatch):
-    monkeypatch.setattr(settings, "place_selection_mode", "model")
     monkeypatch.setattr(trip_rule, "get_DB_places_by_category", FakeDb())
     monkeypatch.setattr(trip_selection, "get_DB_places_by_category", FakeDb())
     return monkeypatch

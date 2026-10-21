@@ -38,8 +38,8 @@ def _factors(*entries, generated_at="2026-10-10T10:00:03Z"):
 
 @pytest.fixture
 def client(monkeypatch):
+    """모델 경로를 쓸 수 없는 서버(conftest가 get_router를 막는다). 2·3안은 규칙 변형으로 채워진다."""
     monkeypatch.setattr(settings, "internal_service_token", "t")
-    monkeypatch.setattr(settings, "place_selection_mode", "rule")
     monkeypatch.setattr(trip_rule, "get_DB_places_by_category", FakeDb())
     return TestClient(app)
 
@@ -48,7 +48,7 @@ def _post(client, body):
     return client.post("/trips/place-selection", json=body, headers=HEADERS)
 
 
-def test_response_is_three_plans_by_day_even_in_rule_mode(client):
+def test_response_is_three_plans_by_day_even_without_a_model_route(client):
     response = _post(client, _body(days=2))
     assert response.status_code == 200
     plans = response.json()["data"]["places"]
@@ -57,6 +57,14 @@ def test_response_is_three_plans_by_day_even_in_rule_mode(client):
     assert all(len(plan[2]) == 2 for plan in plans)  # 마지막 날은 점심까지
     assert all(len({p["id"] for day in plan for p in day}) == sum(len(day) for day in plan) for plan in plans)  # 한 안 안에 중복 없음
     assert plans[1] != plans[0] and plans[2] != plans[0]  # 규칙 변형은 평점순과 다른 조합이다
+
+
+def test_model_fallback_is_logged_as_a_warning_not_an_error(client, caplog):
+    # ERROR 로그는 Sentry 이벤트가 되므로, 모델 서버를 못 쓰는 동안 요청마다 이벤트가 쌓이지 않아야 한다
+    with caplog.at_level("WARNING", logger="app.trips.services.trip_orchestrator"):
+        assert _post(client, _body()).status_code == 200
+    fallbacks = [record for record in caplog.records if "모델 경로 실패, 규칙 변형으로 채움" in record.getMessage()]
+    assert len(fallbacks) == 2 and all(record.levelname == "WARNING" for record in fallbacks)  # [1], [2]안 각각
 
 
 def test_single_day_trip_keeps_the_full_day_template(client):
@@ -113,7 +121,6 @@ def test_unrelated_external_changes_do_not_change_the_response(client):
 
 
 def _model_mode(monkeypatch, fake_model):
-    monkeypatch.setattr(settings, "place_selection_mode", "model")
     monkeypatch.setattr(settings, "model_first_place_top_k", 30)
     monkeypatch.setattr(runtime, "get_router", lambda: object())
     monkeypatch.setattr(trip_orchestrator, "select_trip_by_model", fake_model)
