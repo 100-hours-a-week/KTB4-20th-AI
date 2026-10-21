@@ -16,14 +16,20 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from app.core.config import settings
-from app.trips.schemas.api import Place_Selection_Request
-from app.trips.schemas.schemas import E_Breaker, Place
+from app.trips.schemas.api import (
+    E_Route_Strategy,
+    Place_Selection_Request,
+    Place_Selection_Response_Data,
+    Route,
+)
+from app.trips.schemas.schemas import E_Breaker, E_Preference, Place
 from app.trips.services.model.trip_selection import select_trip_by_model
 from app.trips.services.slot_plan import (
     E_Time_Slot,
     Trip_Slot_Plan,
     build_trip_slot_plan,
 )
+from app.trips.services.taste_share import count_taste_and_discovery
 from app.trips.services.trip_rule import select_trip_by_slot_plan
 
 logger = logging.getLogger(__name__)
@@ -97,3 +103,25 @@ def build_trip_plans(
                 logger.warning("모델 경로 실패, 규칙 변형으로 채움: %s", label, exc_info=True)
                 results.append(fallback())
     return results
+
+
+def group_taste_categories(
+    request: Place_Selection_Request, num_days: int, outdoor_excluded_days: frozenset[int],
+) -> frozenset[E_Preference]:
+    """세 안이 공유하는 그룹 취향 상위 2개 주간 카테고리. build_trip_plans와 같은 시드로 같은 순위를 얻는다."""
+    base = trip_seed(request, outdoor_excluded_days)
+    plan = build_trip_slot_plan(request.members, num_days, random.Random(derive_seed(base, "ties")))
+    return frozenset(plan.days[0].daytime_category_ranking[:2])
+
+
+def build_place_selection(
+    request: Place_Selection_Request, deal_breakers: list[E_Breaker], num_days: int, outdoor_excluded_days: frozenset[int],
+) -> Place_Selection_Response_Data:
+    """응답 조립 (ADR-0012). 1안은 places, 2안(PREFERENCE)과 3안(DIVERSITY)은 취향 반영도와 함께 routes에 담는다."""
+    first, preference, diversity = build_trip_plans(request, deal_breakers, num_days, outdoor_excluded_days)
+    taste_categories = group_taste_categories(request, num_days, outdoor_excluded_days)
+    routes = []
+    for strategy, trip in ((E_Route_Strategy.PREFERENCE, preference), (E_Route_Strategy.DIVERSITY, diversity)):
+        preference_count, discovery_count = count_taste_and_discovery(trip, taste_categories)
+        routes.append(Route(strategy=strategy, preference_count=preference_count, discovery_count=discovery_count, days=trip))
+    return Place_Selection_Response_Data(places=first, routes=routes)
