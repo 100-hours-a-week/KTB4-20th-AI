@@ -1,6 +1,6 @@
 """여행 전체 3개 안을 만든다 (ADR-0008).
 
-  [0] 규칙 경로(평점순). Spring이 재정렬하는 원본이라 항상 규칙으로 만든다.
+  [0] 규칙 경로. 평점 정렬 상위 K곳 중 요청 시드로 고른다(ADR-0011). Spring이 재정렬하는 원본이라 항상 규칙으로 만든다.
   [1] 모델 경로의 취향 안, [2] 모델 경로에 3위·4위 카테고리를 더한 다양성 안.
       모델 경로가 실패하거나 그 안이 유효하지 않으면 그 안만 규칙 변형으로 채운다. 어느 경우에도 3개 안이 나온다.
 
@@ -86,7 +86,7 @@ def build_trip_plans(
         ("plan2", lambda: model_trip(diverse_plan, "plan2", True), lambda: rule_trip(diverse_plan, "plan2")),
     ]
     with ThreadPoolExecutor(max_workers=3) as pool:
-        rule_future = pool.submit(rule_trip, plan)
+        rule_future = pool.submit(rule_trip, plan, "plan0")
         futures = [(label, pool.submit(primary), fallback) for label, primary, fallback in steps]
         results = [rule_future.result()]
         for label, future, fallback in futures:

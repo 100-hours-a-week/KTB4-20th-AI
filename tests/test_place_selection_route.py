@@ -56,7 +56,19 @@ def test_response_is_three_plans_by_day_even_without_a_model_route(client):
     assert all(len(plan) == 3 for plan in plans)  # 3일
     assert all(len(plan[2]) == 2 for plan in plans)  # 마지막 날은 점심까지
     assert all(len({p["id"] for day in plan for p in day}) == sum(len(day) for day in plan) for plan in plans)  # 한 안 안에 중복 없음
-    assert plans[1] != plans[0] and plans[2] != plans[0]  # 규칙 변형은 평점순과 다른 조합이다
+    assert plans[1] != plans[0] and plans[2] != plans[0]  # 세 안은 서로 다른 시드로 고른 조합이다
+
+
+def test_every_rule_plan_picks_with_its_own_seed_including_plan_one(client, monkeypatch):
+    seeds = []
+    real = trip_orchestrator.select_trip_by_slot_plan
+    monkeypatch.setattr(
+        trip_orchestrator, "select_trip_by_slot_plan",
+        lambda *args, **kwargs: seeds.append(args[5]) or real(*args, **kwargs),
+    )
+    assert _post(client, _body(days=1)).status_code == 200
+    assert len(seeds) == 3 and None not in seeds  # [0]도 평점 상위 K곳 중 시드로 고른다
+    assert len(set(seeds)) == 3  # 안마다 다른 시드
 
 
 def test_model_fallback_is_logged_as_a_warning_not_an_error(client, caplog):
