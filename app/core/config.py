@@ -57,7 +57,16 @@ class Settings(BaseSettings):
     model_first_place_top_k: int = 30  # 첫 장소를 모델 상위 K곳 중 무작위로 고른다(ADR-0007). 1이면 모델 1위로 고정
     runpod_model_url: str = Field(default="", repr=False)  # 장소 선정 모델 전용 RunPod 엔드포인트 주소(비어 있으면 GPU 경로를 쓰지 않음)
     runpod_model_api_key: str = Field(default="", repr=False)
-    runpod_model_timeout_seconds: float = 20.0  # 백엔드 → AI 읽기 타임아웃(30초)보다 짧게
+    """
+    Metrics 탭 기준 그래프 (2026년 10월 21일 11pm ~ 11:30pm, 15분 간격으로 설정)
+    - (Execution time) P98: 516ms, P90: 497ms, P70: 493ms
+    - (Delay time) P98: 42.29s, P90: 36.35s, P70: 10.02s
+    - (Cold Start Count) 7
+    - (Worker states)
+        - Running: 1
+        - Idel, Throttled, Unhealthy, Initializing: 0
+    """
+    runpod_model_timeout_seconds: float = 55.0  # 백엔드 → AI 읽기 타임아웃(60초)보다 짧게
     model_breaker_failures: int = 3  # GPU 호출이 이만큼 연속 실패하면 잠시 막는다
     model_breaker_cooldown_seconds: float = 60.0
 
