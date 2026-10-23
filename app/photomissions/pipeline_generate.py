@@ -147,7 +147,7 @@ def build_mission(place: MissionPlace, result: MissionDescription) -> Mission:
 
 
 def split_places(places: list[MissionPlace]) -> list[list[MissionPlace]]:
-    # 장소가 많으면 한 번의 호출이 백엔드 타임아웃(30초)을 넘는다(15곳 이상에서 자주 넘음, 2026-10-19 측정)
+    # 장소가 많으면 한 번의 호출이 길어진다(15곳 이상에서 당시 백엔드 타임아웃 30초를 자주 넘음, 2026-10-19 측정)
     # MAX_PLACES_PER_CALL곳 이하 묶음으로 고르게 나눈다. 순서를 지키고 이어진 장소끼리 묶는다(20곳 → 7+7+6)
     count = math.ceil(len(places) / MAX_PLACES_PER_CALL)
     size, extra = divmod(len(places), count)

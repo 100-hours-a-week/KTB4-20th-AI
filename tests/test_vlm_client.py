@@ -535,7 +535,7 @@ async def test_close_clears_client_even_if_closing_fails(monkeypatch):
 
 def test_deadline_warning_only_when_close_to_backend_timeout():
     assert vlm_client.deadline_warning(_settings(vlm_deadline_seconds=20)) is None
-    assert "30초" in vlm_client.deadline_warning(_settings(vlm_deadline_seconds=25))
+    assert "사용자가 결과를 기다리는 요청" in vlm_client.deadline_warning(_settings(vlm_deadline_seconds=25))
     assert vlm_client.deadline_warning(_settings(verify_backend="gemini", vlm_deadline_seconds=60)) is None
 
 
