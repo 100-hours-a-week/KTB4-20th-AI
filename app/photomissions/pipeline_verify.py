@@ -14,7 +14,7 @@ from fastapi import HTTPException, status
 from google.genai import errors, types
 from PIL import Image, ImageOps
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.core.time import SERVICE_TIMEZONE
 from app.photomissions import vlm_client
 from app.photomissions.gemini_client import generate_structured
@@ -252,7 +252,7 @@ async def score_photo(
     try:
         if settings.verify_backend != "self":
             t.route = "gemini_backend"
-            return await _gemini(t, *args)
+            return await _gemini_alone(t, *args)
         budget = settings.verify_model_budget_seconds
         if budget is None:  # 폴백 없음: 자체 모델 결과·에러를 그대로 돌려준다
             t.route = "self"
@@ -292,6 +292,31 @@ async def _with_fallback(t: VerifyTrace, model_deadline: float, *args) -> ScoreR
                 return result
     except TimeoutError as e:  # 모델 단계 전체 마감을 넘김. timeout 컨텍스트 바깥에서 바꾼다
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과") from e
+
+
+async def _gemini_alone(t: VerifyTrace, *args) -> ScoreResult:
+    # Gemini 단독 판정. 재시도까지 합쳐 VERIFY_GEMINI_DEADLINE_SECONDS 안에서만 돈다. 넘으면 폴백 경로와 같은 504
+    # 백엔드 읽기 타임아웃은 generate와 같이 쓰는 값이라 길어질 수 있어서, 사용자가 기다리는 verify는 여기서 따로 끊는다 (#115)
+    try:
+        async with asyncio.timeout(settings.verify_gemini_deadline_seconds) as deadline:
+            return await _gemini(t, *args)
+    except TimeoutError as e:
+        if not deadline.expired():  # 마감이 아닌 곳에서 난 TimeoutError는 그대로 올린다
+            raise
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="사진 판정 시간 초과") from e
+
+
+def settings_errors(s: Settings) -> list[str]:
+    # verify 공통 설정 검사. 틀리면 앱이 시작되지 않는다 (자체 모델 설정은 vlm_client.check_settings가 따로 본다)
+    deadline = s.verify_gemini_deadline_seconds
+    if not math.isfinite(deadline) or deadline <= 0:  # inf면 마감이 사라지고 nan은 비교가 안 된다
+        return ["VERIFY_GEMINI_DEADLINE_SECONDS는 0보다 큰 유한한 수여야 함"]
+    return []
+
+
+def check_settings(s: Settings) -> None:
+    if problems := settings_errors(s):
+        raise RuntimeError("verify 설정 오류: " + " / ".join(problems))
 
 
 async def _self(t: VerifyTrace, *args, deadline: float | None = None) -> ScoreResult:
@@ -498,6 +523,8 @@ def _log_fields(
         "self_last_error": trace.self_call.get("last_error"),
         "self_attempts": trace.self_call.get("attempts"),
         "budget_sec": trace.budget_sec,
+        # Gemini 단독 판정의 마감. 그 경로로 판정한 요청에만 남긴다 (폴백 경로의 마감은 budget_sec)
+        "gemini_deadline_sec": settings.verify_gemini_deadline_seconds if trace.route == "gemini_backend" else None,
         "self_sec": trace.self_sec,
         "gemini_sec": trace.gemini_sec,
         "model_stage_sec": trace.model_stage_sec,

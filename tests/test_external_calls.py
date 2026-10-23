@@ -919,6 +919,59 @@ async def test_off_hours_question_mode_grades_with_gemini_thresholds(fallback, f
     assert (res.result, res.match_score) == ("success", 95)
 
 
+# 6-1. Gemini 단독 판정 마감 (VERIFY_GEMINI_DEADLINE_SECONDS, #115)
+
+def _set_gemini(monkeypatch, outcome):
+    async def fake_generate(**kwargs):
+        return await outcome() if callable(outcome) else outcome
+    monkeypatch.setattr(pipeline_verify, "generate_structured", fake_generate)
+
+
+async def test_gemini_alone_within_the_deadline_returns_the_answer(monkeypatch):
+    _set_gemini(monkeypatch, GEMINI_RESULT)
+    result, trace = await _score_traced()
+    assert result == ScoreResult(GEMINI_RESULT, "gemini")
+    assert (trace.route, trace.answered_by) == ("gemini_backend", "gemini")
+
+
+async def test_gemini_alone_past_the_deadline_is_504(monkeypatch):
+    # 백엔드가 더 오래 기다려도 verify는 이 마감에서 끝난다
+    monkeypatch.setattr(settings, "verify_gemini_deadline_seconds", 0.1)
+
+    async def slow_gemini():
+        await asyncio.sleep(5)
+        return GEMINI_RESULT
+
+    _set_gemini(monkeypatch, slow_gemini)
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(HTTPException) as exc:
+        await _score_traced()
+    assert (exc.value.status_code, exc.value.detail) == (504, "사진 판정 시간 초과")
+    assert asyncio.get_running_loop().time() - started < 2
+
+
+async def test_gemini_alone_inner_timeout_error_keeps_its_cause(monkeypatch):
+    # 마감 전에 안에서 난 TimeoutError는 504로 바꾸지 않는다 (원인을 숨기지 않게)
+    async def inner_timeout():
+        raise TimeoutError
+
+    _set_gemini(monkeypatch, inner_timeout)
+    with pytest.raises(TimeoutError):
+        await _score_traced()
+
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan")])
+def test_bad_gemini_deadline_stops_startup(monkeypatch, value):
+    monkeypatch.setattr(settings, "verify_gemini_deadline_seconds", value)
+    assert pipeline_verify.settings_errors(settings) == ["VERIFY_GEMINI_DEADLINE_SECONDS는 0보다 큰 유한한 수여야 함"]
+    with pytest.raises(RuntimeError):
+        pipeline_verify.check_settings(settings)
+
+
+def test_default_gemini_deadline_passes():
+    assert pipeline_verify.settings_errors(settings) == []
+
+
 # 7. 요청별 판정 기록 한 줄 (uvicorn.error 로거, JSON)
 
 def _verify_logs(caplog) -> list[dict]:
@@ -1155,3 +1208,30 @@ async def test_cancel_while_waiting_for_fallback_gemini(fallback):
 def test_budget_margin_covers_the_self_deadline_guard():
     # 자체 모델은 자기 마감보다 안전망(DEADLINE_GUARD)만큼 늦게 끝날 수 있다. 여유가 그보다 작으면 폴백할 시간이 줄어든다
     assert vlm_client.BUDGET_MARGIN_SECONDS > vlm_client.DEADLINE_GUARD
+
+
+async def test_log_for_gemini_alone_timeout(fake_verify_steps, monkeypatch, caplog):
+    # Gemini 단독 판정이 마감을 넘기면 마감 값과 실패 단계가 기록에 남는다 (#115)
+    monkeypatch.setattr(pipeline_verify, "score_photo", REAL_SCORE_PHOTO)
+    monkeypatch.setattr(settings, "verify_gemini_deadline_seconds", 0.1)
+
+    async def slow_gemini():
+        await asyncio.sleep(5)
+        return GEMINI_RESULT
+
+    _set_gemini(monkeypatch, slow_gemini)
+    with caplog.at_level("INFO", logger="uvicorn.error"), pytest.raises(HTTPException) as exc:
+        await pipeline_verify.verify_photo(_verify_request(None))
+    assert exc.value.status_code == 504
+    [line] = _verify_logs(caplog)
+    assert (line["route"], line["gemini_deadline_sec"], line["final_status"]) == ("gemini_backend", 0.1, 504)
+    assert (line["failure_stage"], line["error_kind"]) == ("model", "사진 판정 시간 초과")
+
+
+async def test_log_has_no_gemini_deadline_outside_the_gemini_alone_route(full_fallback, caplog):
+    # 폴백 경로의 마감은 budget_sec에 남는다. Gemini 단독 마감 칸은 비운다
+    full_fallback.set_self(VLM_RESULT)
+    with caplog.at_level("INFO", logger="uvicorn.error"):
+        await pipeline_verify.verify_photo(_verify_request(None))
+    [line] = _verify_logs(caplog)
+    assert (line["route"], line["gemini_deadline_sec"], line["budget_sec"]) == ("self", None, 20.0)
