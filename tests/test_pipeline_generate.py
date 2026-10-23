@@ -98,10 +98,10 @@ def _generate_settings(**overrides) -> Settings:
 
 
 def test_generate_deadline_default_is_shorter_than_backend_timeout():
-    # 백엔드 읽기 타임아웃(30초) 안에 우리가 먼저 끝내야 원인별 코드(504 등)가 백엔드에 남는다
+    # 백엔드 읽기 타임아웃(120초) 안에 우리가 먼저 끝내야 원인별 코드(504 등)가 백엔드에 남는다
     s = _generate_settings()
     assert pipeline_generate.settings_errors(s) == []
-    assert s.generate_deadline_seconds < 30
+    assert s.generate_deadline_seconds < 120
 
 
 @pytest.mark.parametrize("deadline", [0, -1, float("nan"), float("inf")])

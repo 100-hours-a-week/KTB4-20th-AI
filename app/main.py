@@ -7,7 +7,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.core.config import settings
 from app.core.sentry import init_sentry
-from app.photomissions import pipeline_generate, vlm_client
+from app.photomissions import pipeline_generate, pipeline_verify, vlm_client
 from app.photomissions.router import router as photomissions_router
 from app.trips.router import router as trips_router
 
@@ -18,6 +18,7 @@ init_sentry()
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         pipeline_generate.start()  # 설정이 틀리면 여기서 멈춘다
+        pipeline_verify.check_settings(settings)  # verify 공통 설정(Gemini 단독 판정 마감). 판정 모델과 상관없이 본다
         # 자체 모델로 판정할 때만 설정을 확인한다. 틀리면 요청을 받기 전에 시작이 멈춘다
         if settings.verify_backend == "self":
             vlm_client.check_settings(settings)

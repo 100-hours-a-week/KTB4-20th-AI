@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # verify 판정 모델. generate는 이 값과 상관없이 항상 Gemini다
     # self로 바꾸면 아래 값들이 모두 필요하다. 형식 외의 검사는 앱 시작 때 한다(측정 스크립트도 settings를 쓰므로)
     verify_backend: Literal["gemini", "self"] = "gemini"
+    # Gemini 단독 판정(VERIFY_BACKEND=gemini)의 모델 단계 전체 상한(초, 재시도 포함). 넘으면 504.
+    # 백엔드 읽기 타임아웃(120초)이 AI 호출 전체에 같이 걸려 있어, verify는 이 값으로 따로 짧게 끝낸다 (#115)
+    verify_gemini_deadline_seconds: float = 25.0
     vlm_base_url: str = Field(default="", repr=False)  # 자체 모델 서버 주소 (OpenAI 호환, 끝의 /v1까지)
     vlm_model: str = ""  # 자체 모델 서버의 모델 이름
     vlm_deadline_seconds: float | None = None  # 판정 한 번에 자체 모델을 기다리는 전체 시간(재시도 포함)
@@ -48,8 +51,9 @@ class Settings(BaseSettings):
     self_retry_threshold: float | None = None
     self_landmark_threshold: float | None = None
 
-    # generate 한 번의 전체 상한(초). 장소 묶음 대기·호출·재시도를 모두 포함한다. 백엔드 읽기 타임아웃(30초)보다 짧게
-    generate_deadline_seconds: float = 25.0
+    # generate 한 번의 전체 상한(초). 장소 묶음 대기·호출·재시도를 모두 포함한다. 백엔드 읽기 타임아웃(120초)보다 짧게.
+    # 7곳 묶음 한 번이 14~17초라 동시 3묶음이면 한 바퀴 약 17초, 110초면 약 6바퀴(약 144곳)까지로 추정한다. 재시도가 섞이면 줄어든다 (#115, 10/23 운영 로그)
+    generate_deadline_seconds: float = 110.0
 
     # 장소 선정 모델(ADR-0003). 2·3안은 항상 모델 경로로 만들고, 경로가 실패하면 그 안만 규칙 변형으로 채운다(ADR-0010)
     model_dir: str = ""  # model.onnx와 codes.json이 있는 폴더(CPU 경로)
