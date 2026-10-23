@@ -32,7 +32,8 @@ POOL_TIMEOUT = 2.0
 MAX_CONNECTIONS = 20
 DEFAULT_RETRY_AFTER = "30"  # 상대 서버가 Retry-After를 안 주면 Gemini 429와 같은 값을 쓴다
 MAX_RETRY_AFTER = 3600  # 상대 서버가 지나치게 큰 값을 줘도 그대로 넘기지 않는다
-# 백엔드는 AI 서버 응답을 30초까지 기다린다(ADR-0004). 사진 다운로드·축소 시간과 여유를 빼면 마감은 이보다 작아야 한다
+# verify는 사용자가 결과를 기다리는 요청이라 모델 단계를 짧게 둔다. 백엔드 읽기 타임아웃(120초)은 generate에 맞춘 값이라
+# verify 대기의 기준이 아니다 (#115). 이 값을 넘는 마감이면 시작할 때 경고한다
 DEADLINE_WARN_SECONDS = 20.0
 # 바깥 안전망은 마감보다 조금 늦게 둔다. 마감 경계에서는 httpx 시간 초과가 먼저 나서 원인별 코드(503·502·504)가 남는다
 # 이벤트 루프가 오래 멈추면 안전망이 먼저 날 수 있고, 그때는 504다
@@ -135,19 +136,19 @@ def check_settings(s: Settings) -> None:
 
 
 def deadline_warning(s: Settings) -> str | None:
-    # 백엔드 읽기 타임아웃(30초)은 AI 서버가 모르는 외부 값이라 시작을 막지 않고 경고만 한다
+    # 사용자 대기 시간의 문제라 시작을 막지 않고 경고만 한다
     # 폴백을 켜면 모델 단계 전체 상한은 예산이고, 끄면 자체 모델 단독 대기(VLM_DEADLINE_SECONDS)다
     if fallback_enabled(s) and s.verify_model_budget_seconds is not None:
         if s.verify_model_budget_seconds > DEADLINE_WARN_SECONDS:
             return (
                 f"VERIFY_MODEL_BUDGET_SECONDS={s.verify_model_budget_seconds:g}초가 {DEADLINE_WARN_SECONDS:g}초보다 큼. "
-                "백엔드는 30초까지만 기다리므로 사진 다운로드·축소 시간을 더하면 판정 결과를 받기 전에 끊길 수 있음"
+                "verify는 사용자가 결과를 기다리는 요청이라, 사진 다운로드·축소 시간을 더하면 대기가 길어짐"
             )
         return None
     if s.verify_backend == "self" and s.vlm_deadline_seconds is not None and s.vlm_deadline_seconds > DEADLINE_WARN_SECONDS:
         return (
             f"VLM_DEADLINE_SECONDS={s.vlm_deadline_seconds:g}초가 {DEADLINE_WARN_SECONDS:g}초보다 큼. "
-            "백엔드는 30초까지만 기다리므로 사진 다운로드·축소 시간을 더하면 판정 결과를 받기 전에 끊길 수 있음"
+            "verify는 사용자가 결과를 기다리는 요청이라, 사진 다운로드·축소 시간을 더하면 대기가 길어짐"
         )
     return None
 
