@@ -56,6 +56,7 @@ from scripts.place_probe import (
 from scripts.question_format import (
     QUESTION_SYSTEM_PROMPT,
     QUESTION_SYSTEM_PROMPT_V2,
+    QUESTION_SYSTEM_PROMPT_V3,
     QuestionAnswer,
     rule_grade,
 )
@@ -199,11 +200,13 @@ def question_fields(answer: QuestionAnswer) -> dict:
 
 # 판정 형식별 (지시문, 응답 스키마, 기록할 칸). score = 지금 서비스(점수), question = 개선 ② 객관식(학습 데이터와 같은 지시문)
 # question_v2 = 장소 질문만 바꾼 객관식 실험. 답 형식·등급 규칙은 question과 같다
+# question_v3 = 대상 질문의 none 경계만 바꾼 객관식(v3 학습 데이터와 같은 지시문). 제로샷 비교 기준을 이걸로 다시 잰다
 # question_obs·identify = 장소 구별 실험 (scripts/place_probe.py)
 FORMATS = {
     "score": (VERIFY_SYSTEM_PROMPT, VlmResult, vlm_fields),
     "question": (QUESTION_SYSTEM_PROMPT, QuestionAnswer, question_fields),
     "question_v2": (QUESTION_SYSTEM_PROMPT_V2, QuestionAnswer, question_fields),
+    "question_v3": (QUESTION_SYSTEM_PROMPT_V3, QuestionAnswer, question_fields),
     "question_obs": (QUESTION_OBS_SYSTEM_PROMPT, QuestionAnswerObs, question_obs_fields),
     "identify": (IDENTIFY_SYSTEM_PROMPT, IdentifyAnswer, identify_fields),
 }
@@ -221,6 +224,7 @@ def out_conflict(records: list[dict], model: str, fmt: str) -> str | None:
 def add_format_args(ap: argparse.ArgumentParser) -> None:
     # baseline_verify(평가셋 A)·measure_eval_b(B·B 보강)가 같은 옵션을 쓴다
     ap.add_argument("--format", choices=tuple(FORMATS), default="score", help="score = 지금 서비스(점수), question = 객관식, question_v2 = 장소 질문만 바꾼 객관식, "
+                         "question_v3 = 대상 질문의 none 경계만 바꾼 객관식(v3 학습 지시문), "
                          "question_obs = 관찰 칸을 먼저 쓰는 객관식, identify = 목표 장소 없이 장소 알아보기")
     ap.add_argument("--split-file", type=pathlib.Path, help="개선용·최종용 나누기 결과 (eval_split.json)")
     ap.add_argument("--split", choices=("dev", "final"), help="이쪽 사진만 모델에 보낸다")
