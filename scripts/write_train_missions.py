@@ -11,6 +11,9 @@ build_train_pilot.py가 뽑은 사진(manifest.jsonl)에 세 가지 방법으로
   # 실제 호출 (Gemini 비용 발생)
   uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/pilot --aihub /Volumes/T7/aihub
 
+  # 550개: 1차는 조건 바꾸기 없이, 사람이 표시한 뒤 --labels로 다시 돌려 성공 미션에서만 바꾼다
+  uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/run550 --aihub /Volumes/T7/aihub --pw-per-category 24 --skip-swap
+
   결과는 pilot-dir/missions.jsonl에 미션 1개당 한 줄로 쌓인다. 다시 실행하면 이미 만든 미션은 건너뛴다.
 
 generate에는 전체 마감(GENERATE_DEADLINE_SECONDS, 기본 25초)이 있어 넘으면 504로 기록된다. 예전 결과는 마감 없이
@@ -88,12 +91,12 @@ def conflicts(mission: str) -> bool:
     return "다 같이" in mission and "가까이" in mission
 
 
-def pw_mode(records: list[dict]) -> str | None:
+def pw_mode(records: list[dict], cond: int = PW_COND, plain: int = PW_PLAIN) -> str | None:
     # 한 카테고리의 photo_written 기록을 보고 다음 사진에 쓸 방식을 정한다. 다 채웠으면 None
     usable = [r for r in records if r["source"] == "photo_written" and r.get("usable")]
-    if sum(r["with_condition"] for r in usable) < PW_COND:
+    if sum(r["with_condition"] for r in usable) < cond:
         return "with_condition"
-    if sum(not r["with_condition"] for r in usable) < PW_PLAIN:
+    if sum(not r["with_condition"] for r in usable) < plain:
         return "plain"
     return None
 
@@ -135,6 +138,10 @@ async def main() -> None:
     ap.add_argument("--labels", type=pathlib.Path,
                     help="파일럿 표시 결과. 주면 사람이 성공으로 표시한 미션에서만 조건을 바꾼다 (2차)")
     ap.add_argument("--max-calls", type=int, default=0, help="이번 실행의 최대 호출 수 (0이면 제한 없음)")
+    ap.add_argument("--pw-per-category", type=int, default=PW_COND + PW_PLAIN,
+                    help="카테고리마다 사진 보고 쓰기 미션 수. 절반은 조건을 넣는다 (파일럿 4, 550개용 24)")
+    ap.add_argument("--skip-swap", action="store_true",
+                    help="조건 바꾸기를 건너뛴다. 550개는 사람이 성공으로 표시한 뒤 --labels로 다시 돌려 바꾼다")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -149,15 +156,20 @@ async def main() -> None:
 
     gen_rows = [r for r in rows if r["role"] == "service_generate" and f"{r['photo']}#gen" not in done_ids]
     gen_batches = make_batches(gen_rows, batch_size=5, seed=20261010)
-    pw_left = {c: pw_mode(by_cat[c]) for c in TRAIN_CATEGORIES}
+    pw_cond = args.pw_per_category // 2
+    pw_plain = args.pw_per_category - pw_cond
+    pw_left = {c: pw_mode(by_cat[c], pw_cond, pw_plain) for c in TRAIN_CATEGORIES}
     success_ids = None
     if args.labels:
         items = json.loads(args.labels.read_text(encoding="utf-8"))["items"]
         success_ids = {x["mission_id"] for x in items if x.get("final_grade") == "success"}
     print(f"사진 {len(rows)}장 · 지금까지 미션 {len(records)}개")
     print(f"사진 보고 쓰기: 아직 덜 채운 카테고리 {[c for c, m in pw_left.items() if m]}")
-    print(f"조건 바꾸기: 지금 바꿀 수 있는 미션 {len(swap_targets(records, success_ids))}개"
-          + (" (사람이 성공으로 표시한 미션에서만)" if success_ids is not None else " (사진 보고 쓰기가 끝나면 늘어남)"))
+    if args.skip_swap:
+        print("조건 바꾸기: 이번엔 건너뜀 (--skip-swap)")
+    else:
+        print(f"조건 바꾸기: 지금 바꿀 수 있는 미션 {len(swap_targets(records, success_ids))}개"
+              + (" (사람이 성공으로 표시한 미션에서만)" if success_ids is not None else " (사진 보고 쓰기가 끝나면 늘어남)"))
     print(f"서비스 미션: 남은 사진 {len(gen_rows)}장 → generate {len(gen_batches)}회")
     if args.dry_run:
         return
@@ -179,10 +191,10 @@ async def main() -> None:
                 records.append(record)
                 by_cat[record["category"]].append(record)
 
-        # 1) 사진 보고 쓰기: 카테고리마다 예비 사진까지 순서대로, 4개를 채우면 멈춘다
+        # 1) 사진 보고 쓰기: 카테고리마다 예비 사진까지 순서대로, --pw-per-category개를 채우면 멈춘다
         for category in TRAIN_CATEGORIES:
             for row in (r for r in rows if r["category"] == category and r["role"] == "photo_written"):
-                mode = pw_mode(by_cat[category])
+                mode = pw_mode(by_cat[category], pw_cond, pw_plain)
                 if mode is None or not budget_left():
                     break
                 if f"{row['photo']}#pw" in done_ids:
@@ -202,7 +214,7 @@ async def main() -> None:
 
         # 2) 조건 바꾸기: 원래 미션마다 1개. 바꿀 조건은 SWAP_ORDER를 돌아가며 정한다
         row_of = {r["photo"]: r for r in rows}
-        for i, parent in enumerate(swap_targets(records, success_ids)):
+        for i, parent in enumerate([] if args.skip_swap else swap_targets(records, success_ids)):
             if not budget_left():
                 break
             row = row_of[parent["photo"]]

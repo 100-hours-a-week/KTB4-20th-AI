@@ -25,6 +25,14 @@ def test_pw_mode_ignores_unusable_photos():
     assert PW_COND + PW_PLAIN == 4
 
 
+def test_pw_mode_can_fill_more_per_category():
+    # 550개용은 카테고리마다 24개(조건 12 + 그냥 12)를 채운다. 기본값을 쓰면 파일럿처럼 4개에서 멈춘다
+    twelve_cond = [_rec(f"c{i}", with_condition=True) for i in range(12)]
+    assert pw_mode(twelve_cond[:4], 12, 12) == "with_condition"
+    assert pw_mode(twelve_cond, 12, 12) == "plain"
+    assert pw_mode([*twelve_cond, *(_rec(f"p{i}") for i in range(12))], 12, 12) is None
+
+
 def test_swap_targets_are_usable_condition_missions_not_yet_swapped():
     records = [
         _rec("a", with_condition=True),
