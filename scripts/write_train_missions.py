@@ -15,6 +15,10 @@ build_train_pilot.py가 뽑은 사진(manifest.jsonl)에 세 가지 방법으로
   # 550개: 1차는 조건 바꾸기 없이, 사람이 표시한 뒤 --labels로 다시 돌려 성공 미션에서만 바꾼다
   uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/run550 --aihub /Volumes/T7/aihub --pw-per-category 24 --skip-swap
 
+  # 550개 보강(2026-11-05): 예비 목록(general_spare.jsonl)도 읽고, 사진 보고 쓰기 목표를 올려 예비 사진까지 쓴다
+  uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/run550 --aihub /Volumes/T7/aihub \\
+      --extra-manifest /Volumes/T7/aihub/train/run550/general_spare.jsonl --pw-per-category 30 --skip-swap --dry-run
+
   결과는 pilot-dir/missions.jsonl에 미션 1개당 한 줄로 쌓인다. 다시 실행하면 이미 만든 미션은 건너뛴다.
 
 generate에는 전체 마감(GENERATE_DEADLINE_SECONDS, 기본 25초)이 있어 넘으면 504로 기록된다. 예전 결과는 마감 없이
@@ -26,7 +30,7 @@ import asyncio
 import json
 import pathlib
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from fastapi import HTTPException
 from google.genai import types
@@ -166,10 +170,17 @@ async def main() -> None:
                     help="카테고리마다 사진 보고 쓰기 미션 수. 절반은 조건을 넣는다 (파일럿 4, 550개용 24)")
     ap.add_argument("--skip-swap", action="store_true",
                     help="조건 바꾸기를 건너뛴다. 550개는 사람이 성공으로 표시한 뒤 --labels로 다시 돌려 바꾼다")
+    ap.add_argument("--extra-manifest", type=pathlib.Path, action="append", default=[],
+                    help="manifest.jsonl 뒤에 이어 읽을 사진 목록 (예비 목록, 여러 번 가능)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    rows = [json.loads(line) for line in (args.pilot_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines() if line]
+    rows = []
+    for path in [args.pilot_dir / "manifest.jsonl", *args.extra_manifest]:
+        rows += [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    dup = sorted(p for p, n in Counter(r["photo"] for r in rows).items() if n > 1)
+    if dup:  # 같은 사진이 두 목록에 있으면 같은 미션 ID가 두 번 생긴다
+        ap.error(f"사진 목록 두 곳에 같은 사진 {len(dup)}장 (예: {dup[:3]})")
     out = args.pilot_dir / "missions.jsonl"
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line] if out.exists() else []
     records = [r for r in records if "error" not in r]  # 에러 난 것은 다시 호출한다
