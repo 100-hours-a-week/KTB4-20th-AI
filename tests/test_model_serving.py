@@ -49,13 +49,15 @@ class _Cpu:
         return ["B"] * len(slots)
 
 
-def test_router_prefers_gpu_then_falls_back_to_cpu():
-    ok = InferenceRouter(_Gpu("ok"), _Cpu())
-    assert ok.generate([1], [["A"]]) == (["A"], "gpu")
-    bad = InferenceRouter(_Gpu("fail"), _Cpu())
-    assert bad.generate([1], [["A"]]) == (["B"], "cpu")
+def test_router_uses_gpu_and_does_not_fall_back_to_cpu():
+    assert InferenceRouter(_Gpu("ok"), _Cpu()).generate([1], [["A"]]) == (["A"], "gpu")
+    with pytest.raises(InferenceUnavailable):  # GPU가 실패해도 CPU 엔진이 있어도 폴백하지 않는다
+        InferenceRouter(_Gpu("fail"), _Cpu()).generate([1], [["A"]])
     with pytest.raises(InferenceUnavailable):
-        InferenceRouter(_Gpu("fail"), None).generate([1], [["A"]])
+        InferenceRouter(_Gpu("fail")).generate([1], [["A"]])
+    assert InferenceRouter(None, _Cpu()).generate([1], [["A"]]) == (["B"], "cpu")  # GPU 없이 CPU 엔진만(오프라인 스크립트)
+    with pytest.raises(InferenceUnavailable):
+        InferenceRouter(None, None).generate([1], [["A"]])
 
 
 def test_runpod_engine_validates_response_and_wraps_errors():
@@ -331,7 +333,7 @@ def test_local_engine_generate_trip_uses_the_shared_generation_and_the_concurren
         engine.generate_trip([1], {"all": ["A"]}, [["all"]])
 
 
-def test_router_generate_trip_falls_back_from_gpu_to_cpu_and_calls_gpu_every_time():
+def test_router_generate_trip_does_not_fall_back_to_cpu_and_calls_gpu_every_time():
     class TripGpu:
         calls = 0
 
@@ -344,9 +346,7 @@ def test_router_generate_trip_falls_back_from_gpu_to_cpu_and_calls_gpu_every_tim
             return [["B"]]
 
     router = InferenceRouter(TripGpu(), TripCpu())
-    assert router.generate_trip([1], {"all": ["B"]}, [["all"]]) == ([["B"]], "cpu")
-    router.generate_trip([1], {"all": ["B"]}, [["all"]])
-    router.generate_trip([1], {"all": ["B"]}, [["all"]])
-    assert TripGpu.calls == 3  # 서킷 브레이커가 없어서 실패해도 매번 GPU를 먼저 부른다
-    with pytest.raises(InferenceUnavailable):
-        InferenceRouter(TripGpu(), None).generate_trip([1], {"all": ["B"]}, [["all"]])
+    for _ in range(3):
+        with pytest.raises(InferenceUnavailable):  # CPU 엔진이 있어도 폴백하지 않는다
+            router.generate_trip([1], {"all": ["B"]}, [["all"]])
+    assert TripGpu.calls == 3  # 서킷 브레이커가 없어서 실패해도 매번 GPU를 부른다
