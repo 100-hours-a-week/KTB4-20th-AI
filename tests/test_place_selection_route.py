@@ -202,7 +202,7 @@ def test_model_plans_use_derived_seeds_k_from_settings_and_diversity_for_the_thi
         assert plan_seeds[0] != plan_seeds[2]  # 요청이 다르면 시드도 다르다
 
 
-def test_model_failure_is_raised_and_the_later_plan_is_not_run(client, monkeypatch):
+def test_model_failure_is_raised_without_a_rule_fallback(client, monkeypatch):
     called = []
 
     def fake_model(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
@@ -212,7 +212,7 @@ def test_model_failure_is_raised_and_the_later_plan_is_not_run(client, monkeypat
     _model_mode(monkeypatch, fake_model)
     with pytest.raises(RuntimeError, match="모델 경로 실패"):
         _post(client, _body(days=2))
-    assert called == [False]  # 취향 안에서 실패하면 다양성 안은 실행되지 않는다
+    assert sorted(called) == [False, True]  # 두 모델 안이 동시에 시작해 둘 다 실행되고, 규칙으로 채우지 않고 예외가 그대로 올라간다
 
 
 def test_invalid_model_result_is_raised_instead_of_filled_with_a_rule_variant(client, monkeypatch):
@@ -224,20 +224,24 @@ def test_invalid_model_result_is_raised_instead_of_filled_with_a_rule_variant(cl
         _post(client, _body(days=2))
 
 
-def test_plans_run_one_after_another_in_the_same_thread(client, monkeypatch):
+def test_plans_run_concurrently_in_three_threads(client, monkeypatch):
+    # 세 안이 동시에 시작해야 세 번째 대기자가 올 때 배리어가 풀린다. 순차로 실행되면 시간 초과로 BrokenBarrierError가 난다
+    barrier = threading.Barrier(3, timeout=5)
     events = []
     real_rule = trip_orchestrator.select_trip_by_slot_plan
 
     def traced_rule(*args, **kwargs):
         events.append(("plan0", threading.get_ident()))
+        barrier.wait()
         return real_rule(*args, **kwargs)
 
     def fake_model(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
         events.append(("plan2" if diversity else "plan1", threading.get_ident()))
+        barrier.wait()
         return real_rule(trip_plan, deal_breakers, region, members, outdoor_excluded_days, kwargs["seed"]), "gpu"
 
     _model_mode(monkeypatch, fake_model)
     monkeypatch.setattr(trip_orchestrator, "select_trip_by_slot_plan", traced_rule)
     assert _post(client, _body(days=1)).status_code == 200
-    assert [name for name, _ in events] == ["plan0", "plan1", "plan2"]
-    assert len({thread for _, thread in events}) == 1  # 세 안이 한 스레드에서 차례로 실행된다
+    assert sorted(name for name, _ in events) == ["plan0", "plan1", "plan2"]
+    assert len({thread for _, thread in events}) == 3  # 세 안이 서로 다른 스레드에서 실행된다

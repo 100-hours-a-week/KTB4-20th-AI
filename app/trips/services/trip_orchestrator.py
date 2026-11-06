@@ -3,8 +3,9 @@
   [0] 규칙 경로. 평점 정렬 상위 K곳 중 요청 시드로 고른다(ADR-0011). Spring이 재정렬하는 원본이라 항상 규칙으로 만든다.
   [1] 모델 경로의 취향 안, [2] 모델 경로에 3위·4위 카테고리를 더한 다양성 안.
 
-부하 테스트 baseline: [0], [1], [2]를 한 스레드에서 차례로 만든다. 앞 안이 끝나야 다음 안이 시작하고,
-어느 안에서 예외가 나도 규칙 변형으로 채우지 않고 그대로 올린다(뒤의 안은 실행되지 않는다).
+부하 테스트 개선안: [0], [1], [2]를 스레드 3개에서 동시에 시작하고 셋이 모두 끝나면 응답한다. 한 요청의 대기가
+세 안의 대기를 합친 값이 아니라 가장 오래 걸린 안의 값이 된다. 어느 안에서 예외가 나도 규칙 변형으로 채우지 않고
+그대로 올린다(나머지 안은 이미 시작했으므로 끝날 때까지 기다린 뒤 예외가 올라간다).
 시드는 요청의 지역, 날짜, 구성원, 이 여행에 해당하는 날씨 신호로만 만든다
 (precheck의 generated_at이나 다른 지역의 신호가 바뀌어도 같은 여행 조건이면 같은 일정이 나온다).
 """
@@ -13,6 +14,7 @@ import hashlib
 import json
 import logging
 import random
+from concurrent.futures import ThreadPoolExecutor
 
 from app.core.config import settings
 from app.trips.schemas.api import (
@@ -86,11 +88,13 @@ def build_trip_plans(
         logger.info("place-selection: model plan=%s route=%s places=%d", label, route, sum(len(day) for day in trip))
         return trip
 
-    return [
-        rule_trip(plan, "plan0"),
-        model_trip(plan, "plan1", False),
-        model_trip(diverse_plan, "plan2", True),
-    ]
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [
+            pool.submit(rule_trip, plan, "plan0"),
+            pool.submit(model_trip, plan, "plan1", False),
+            pool.submit(model_trip, diverse_plan, "plan2", True),
+        ]
+        return [future.result() for future in futures]
 
 
 def group_taste_categories(
