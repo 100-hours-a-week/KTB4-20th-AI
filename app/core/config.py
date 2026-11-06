@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     """
     runpod_model_timeout_seconds: float = 55.0  # 백엔드 → AI 읽기 타임아웃(60초)보다 짧게
 
+    # place-selection을 동시에 처리하는 요청 수 한도. 넘으면 기다리지 않고 바로 503을 돌려준다.
+    # 사용자 결정으로 6이다(부하 테스트 k6의 동시 요청 수 기본값과 맞춤). 참고: RunPod 워커 1개가 호출을 하나씩(호출당 약 1.34초)
+    # 처리하고 요청당 호출이 2개라서, 콜드 스타트 8.5초를 포함해 호출 타임아웃 55초 안에 끝나는 최대 동시 요청 수는 계산상 약 17이다.
+    place_selection_max_concurrency: int = Field(default=6, ge=1)
+
     @property
     def allowed_image_hosts_list(self) -> list[str]:
         return [h.strip().lower() for h in self.allowed_image_hosts.split(",") if h.strip()]

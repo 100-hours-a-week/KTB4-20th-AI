@@ -1,8 +1,10 @@
 import logging
+import threading
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.auth import verify_internal_token
+from app.core.config import settings
 from app.trips.schemas.api import (
     E_Response_Status_Code,
     Place_Selection_Request,
@@ -23,6 +25,10 @@ router = APIRouter(
     dependencies=[Depends(verify_internal_token)],
 )
 
+# place-selection을 동시에 처리하는 요청 수 한도. RunPod 워커가 호출을 하나씩 처리해서 한도를 넘는 요청은 호출 타임아웃(55초)까지
+# 기다리다 실패한다. 그래서 한도가 차면 기다리지 않고 바로 503으로 거절한다
+_place_selection_slots = threading.BoundedSemaphore(settings.place_selection_max_concurrency)
+
 @router.post("/place-selection", response_model=Response[Place_Selection_Response_Data])
 def place_selection(request: Place_Selection_Request) -> Response[Place_Selection_Response_Data]:
     """
@@ -34,14 +40,20 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
     external_factors(precheck 응답)는 요청의 지역과 여행 날짜에 해당하는 has_issue만 읽고, 신호가 있는 날은 야외 후보를 뺀다.
     """
 
-    # 회피조건 취합 (그룹 전체)
-    deal_breakers: list[E_Breaker] = []
-    for member in request.members:
-        deal_breakers.extend(member.deal_breakers)
+    if not _place_selection_slots.acquire(blocking=False):
+        logger.warning("place-selection 동시 처리 한도(%d) 초과, 503으로 거절", settings.place_selection_max_concurrency)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="동시 처리 한도를 넘었음")
+    try:
+        # 회피조건 취합 (그룹 전체)
+        deal_breakers: list[E_Breaker] = []
+        for member in request.members:
+            deal_breakers.extend(member.deal_breakers)
 
-    num_days = (request.end_date - request.start_date).days + 1
-    signal_days = outdoor_excluded_days(request.external_factors, request.region, request.start_date, num_days)
-    data = build_place_selection(request, deal_breakers, num_days, signal_days)
+        num_days = (request.end_date - request.start_date).days + 1
+        signal_days = outdoor_excluded_days(request.external_factors, request.region, request.start_date, num_days)
+        data = build_place_selection(request, deal_breakers, num_days, signal_days)
+    finally:
+        _place_selection_slots.release()
 
     return Response[Place_Selection_Response_Data](status_code=E_Response_Status_Code.SUCCESS, data=data)
 
