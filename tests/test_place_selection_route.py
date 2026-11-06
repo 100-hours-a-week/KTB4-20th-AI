@@ -1,5 +1,6 @@
 import copy
 import json
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -50,8 +51,8 @@ class NightTypedFakeDb(FakeDb):
 
 
 @pytest.fixture
-def client(monkeypatch):
-    """모델 경로를 쓸 수 없는 서버(conftest가 get_router를 막는다). 2·3안은 규칙 변형으로 채워진다."""
+def client(monkeypatch, rule_backed_model_route):
+    """2·3안은 모델 경로 대신 규칙 선택으로 만드는 대역을 쓴다(conftest가 실제 모델 경로를 막는다)."""
     monkeypatch.setattr(settings, "internal_service_token", "t")
     monkeypatch.setattr(trip_rule, "get_DB_places_by_category", NightTypedFakeDb())
     return TestClient(app)
@@ -112,14 +113,6 @@ def test_every_rule_plan_picks_with_its_own_seed_including_plan_one(client, monk
     assert _post(client, _body(days=1)).status_code == 200
     assert len(seeds) == 3 and None not in seeds  # [0]도 평점 상위 K곳 중 시드로 고른다
     assert len(set(seeds)) == 3  # 안마다 다른 시드
-
-
-def test_model_fallback_is_logged_as_a_warning_not_an_error(client, caplog):
-    # ERROR 로그는 Sentry 이벤트가 되므로, 모델 서버를 못 쓰는 동안 요청마다 이벤트가 쌓이지 않아야 한다
-    with caplog.at_level("WARNING", logger="app.trips.services.trip_orchestrator"):
-        assert _post(client, _body()).status_code == 200
-    fallbacks = [record for record in caplog.records if "모델 경로 실패, 규칙 변형으로 채움" in record.getMessage()]
-    assert len(fallbacks) == 2 and all(record.levelname == "WARNING" for record in fallbacks)  # [1], [2]안 각각
 
 
 def test_single_day_trip_keeps_the_full_day_template(client):
@@ -187,7 +180,7 @@ def _fake_model_trip(trip_plan, tag):
 
 
 def test_model_plans_use_derived_seeds_k_from_settings_and_diversity_for_the_third(client, monkeypatch):
-    seeds = {False: [], True: []}  # 안([1]=False, [2]=True)마다 요청 순서대로. 두 안은 스레드에서 동시에 불리므로 안별로 나눠 기록한다
+    seeds = {False: [], True: []}  # 안([1]=False, [2]=True)마다 요청 순서대로. 두 안을 안별로 나눠 기록한다
     first_ks = []
 
     def fake_model(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
@@ -209,15 +202,42 @@ def test_model_plans_use_derived_seeds_k_from_settings_and_diversity_for_the_thi
         assert plan_seeds[0] != plan_seeds[2]  # 요청이 다르면 시드도 다르다
 
 
-def test_model_failure_or_invalid_result_fills_only_that_plan_with_a_rule_variant(client, monkeypatch):
+def test_model_failure_is_raised_and_the_later_plan_is_not_run(client, monkeypatch):
+    called = []
+
     def fake_model(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
-        if not diversity:
-            raise RuntimeError("모델 경로 실패")
+        called.append(diversity)
+        raise RuntimeError("모델 경로 실패")
+
+    _model_mode(monkeypatch, fake_model)
+    with pytest.raises(RuntimeError, match="모델 경로 실패"):
+        _post(client, _body(days=2))
+    assert called == [False]  # 취향 안에서 실패하면 다양성 안은 실행되지 않는다
+
+
+def test_invalid_model_result_is_raised_instead_of_filled_with_a_rule_variant(client, monkeypatch):
+    def fake_model(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
         return [[] for _ in trip_plan.days], "gpu"  # 슬롯을 거의 못 채운 결과는 유효하지 않다
 
     _model_mode(monkeypatch, fake_model)
-    response = _post(client, _body(days=2))
-    assert response.status_code == 200
-    plans = _plans(response.json())
-    assert [len(plan) for plan in plans] == [3, 3, 3]
-    assert all(len(plan[0]) >= 5 for plan in plans)  # 두 안 모두 규칙 변형으로 채워졌다
+    with pytest.raises(ValueError, match="모델 경로 결과가 유효하지 않음"):
+        _post(client, _body(days=2))
+
+
+def test_plans_run_one_after_another_in_the_same_thread(client, monkeypatch):
+    events = []
+    real_rule = trip_orchestrator.select_trip_by_slot_plan
+
+    def traced_rule(*args, **kwargs):
+        events.append(("plan0", threading.get_ident()))
+        return real_rule(*args, **kwargs)
+
+    def fake_model(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
+        events.append(("plan2" if diversity else "plan1", threading.get_ident()))
+        return real_rule(trip_plan, deal_breakers, region, members, outdoor_excluded_days, kwargs["seed"]), "gpu"
+
+    _model_mode(monkeypatch, fake_model)
+    monkeypatch.setattr(trip_orchestrator, "select_trip_by_slot_plan", traced_rule)
+    assert _post(client, _body(days=1)).status_code == 200
+    assert [name for name, _ in events] == ["plan0", "plan1", "plan2"]
+    assert len({thread for _, thread in events}) == 1  # 세 안이 한 스레드에서 차례로 실행된다

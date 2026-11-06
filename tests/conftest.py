@@ -18,6 +18,22 @@ def no_real_model_route(monkeypatch):
     monkeypatch.setattr(runtime, "get_router", unavailable)
 
 
+@pytest.fixture
+def rule_backed_model_route(monkeypatch):
+    # baseline은 모델 경로 실패를 규칙 변형으로 채우지 않는다. 일정 생성이 성공해야 하는 테스트는 2·3안의 모델 경로 자리에
+    # 모델 경로가 쓰는 시드로 규칙 선택을 하는 대역을 쓴다
+    from app.trips.services import trip_orchestrator
+
+    def stand_in(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
+        trip = trip_orchestrator.select_trip_by_slot_plan(
+            trip_plan, deal_breakers, region, members, outdoor_excluded_days, kwargs["seed"],
+        )
+        return trip, "gpu"
+
+    monkeypatch.setattr(runtime, "get_router", lambda: object())
+    monkeypatch.setattr(trip_orchestrator, "select_trip_by_model", stand_in)
+
+
 @pytest.fixture(scope="session")
 def test_client():
     with TestClient(app) as client_instance:

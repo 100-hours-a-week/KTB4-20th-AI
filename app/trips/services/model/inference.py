@@ -9,7 +9,6 @@
 import json
 import logging
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -121,34 +120,11 @@ class RunPodEngine:
         return body.get("output") or {}
 
 
-class CircuitBreaker:
-    def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 60.0, clock: Callable[[], float] = time.monotonic):
-        self.failure_threshold, self.cooldown, self.clock = failure_threshold, cooldown_seconds, clock
-        self.failures, self.opened_at = 0, None
-        self._lock = threading.Lock()
-
-    def allow(self) -> bool:
-        with self._lock:
-            if self.opened_at is None:
-                return True
-            return self.clock() - self.opened_at >= self.cooldown  # 쿨다운이 지나면 한 번 시험 호출을 허용한다
-
-    def record_success(self) -> None:
-        with self._lock:
-            self.failures, self.opened_at = 0, None
-
-    def record_failure(self) -> None:
-        with self._lock:
-            self.failures += 1
-            if self.failures >= self.failure_threshold:
-                self.opened_at = self.clock()
-
-
 class InferenceRouter:
-    """GPU 우선, 실패하면 CPU. 어느 경로가 썼는지 route를 함께 돌려준다."""
+    """GPU 우선, 실패하면 CPU. 어느 경로가 썼는지 route를 함께 돌려준다. 부하 테스트 baseline: 서킷 브레이커 없이 매번 GPU를 먼저 부른다."""
 
-    def __init__(self, gpu: RunPodEngine | None, cpu: LocalEngine | None, breaker: CircuitBreaker | None = None):
-        self.gpu, self.cpu, self.breaker = gpu, cpu, breaker or CircuitBreaker()
+    def __init__(self, gpu: RunPodEngine | None, cpu: LocalEngine | None):
+        self.gpu, self.cpu = gpu, cpu
 
     def generate(
         self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH, first_k: int = 1, seed: int | None = None,
@@ -162,13 +138,10 @@ class InferenceRouter:
         return self._route(lambda engine: engine.generate_trip(header, pools, days, width, first_k, seed))
 
     def _route(self, run: Callable):
-        if self.gpu is not None and self.breaker.allow():
+        if self.gpu is not None:
             try:
-                result = run(self.gpu)
-                self.breaker.record_success()
-                return result, "gpu"
+                return run(self.gpu), "gpu"
             except InferenceUnavailable as error:
-                self.breaker.record_failure()
                 logger.warning("GPU 경로 실패, CPU로 폴백: %s", error)
         if self.cpu is not None:
             return run(self.cpu), "cpu"

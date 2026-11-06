@@ -71,8 +71,6 @@ class Settings(BaseSettings):
         - Idel, Throttled, Unhealthy, Initializing: 0
     """
     runpod_model_timeout_seconds: float = 55.0  # 백엔드 → AI 읽기 타임아웃(60초)보다 짧게
-    model_breaker_failures: int = 3  # GPU 호출이 이만큼 연속 실패하면 잠시 막는다
-    model_breaker_cooldown_seconds: float = 60.0
 
     @property
     def allowed_image_hosts_list(self) -> list[str]:

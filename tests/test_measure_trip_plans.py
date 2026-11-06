@@ -87,16 +87,14 @@ def test_run_case_records_model_calls_and_metrics_for_the_real_flow(fake_environ
     assert trip_orchestrator.select_trip_by_model is not None and trip_orchestrator.select_trip_by_model.__name__ == "select_trip_by_model"
 
 
-def test_run_case_marks_a_failed_model_plan_as_not_used(fake_environment):
+def test_run_case_raises_when_the_model_plan_fails(fake_environment):
     class BrokenRouter:
         def generate_trip(self, *args, **kwargs):
             raise RuntimeError("GPU 실패")
 
     fake_environment.setattr(runtime, "get_router", lambda: BrokenRouter())
-    result = measure.run_case({"region": "서울", "survey": 0, "days": 2, "signal_days": []}, SURVEYS)
-    for label in ("plan1", "plan2"):
-        assert not result["model_calls"][label]["used_model"] and result["model_calls"][label]["error"] == "RuntimeError"
-    assert len(result["plan_sizes"]) == 3  # 규칙 변형으로 채워져 3개 안은 그대로 나온다
+    with pytest.raises(RuntimeError, match="GPU 실패"):  # baseline은 실패를 규칙 변형으로 채우지 않는다
+        measure.run_case({"region": "서울", "survey": 0, "days": 2, "signal_days": []}, SURVEYS)
 
 
 def _row(days, total, call1, call2, used=True, meets=True, extra=(1, 4), outdoor=0):

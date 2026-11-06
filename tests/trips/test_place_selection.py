@@ -12,6 +12,8 @@ from tests.constants import (
 
 PLACE_SELECTION_URL = "/trips/place-selection"
 
+pytestmark = pytest.mark.usefixtures("rule_backed_model_route")  # 성공 요청이 모델 서버 없이도 200이 되게 한다
+
 """
     Request Body 구분
     - 지역

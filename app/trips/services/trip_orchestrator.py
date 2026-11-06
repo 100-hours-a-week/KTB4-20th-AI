@@ -2,9 +2,10 @@
 
   [0] 규칙 경로. 평점 정렬 상위 K곳 중 요청 시드로 고른다(ADR-0011). Spring이 재정렬하는 원본이라 항상 규칙으로 만든다.
   [1] 모델 경로의 취향 안, [2] 모델 경로에 3위·4위 카테고리를 더한 다양성 안.
-      모델 경로가 실패하거나 그 안이 유효하지 않으면 그 안만 규칙 변형으로 채운다. 어느 경우에도 3개 안이 나온다.
 
-[0]의 DB 조회와 [1], [2]의 후보 조회·모델 호출은 동시에 시작한다. 시드는 요청의 지역, 날짜, 구성원, 이 여행에 해당하는 날씨 신호로만 만든다
+부하 테스트 baseline: [0], [1], [2]를 한 스레드에서 차례로 만든다. 앞 안이 끝나야 다음 안이 시작하고,
+어느 안에서 예외가 나도 규칙 변형으로 채우지 않고 그대로 올린다(뒤의 안은 실행되지 않는다).
+시드는 요청의 지역, 날짜, 구성원, 이 여행에 해당하는 날씨 신호로만 만든다
 (precheck의 generated_at이나 다른 지역의 신호가 바뀌어도 같은 여행 조건이면 같은 일정이 나온다).
 """
 
@@ -12,8 +13,6 @@ import hashlib
 import json
 import logging
 import random
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 
 from app.core.config import settings
 from app.trips.schemas.api import (
@@ -87,22 +86,11 @@ def build_trip_plans(
         logger.info("place-selection: model plan=%s route=%s places=%d", label, route, sum(len(day) for day in trip))
         return trip
 
-    steps: list[tuple[str, Callable[[], Trip], Callable[[], Trip]]] = [
-        ("plan1", lambda: model_trip(plan, "plan1", False), lambda: rule_trip(plan, "plan1")),
-        ("plan2", lambda: model_trip(diverse_plan, "plan2", True), lambda: rule_trip(diverse_plan, "plan2")),
+    return [
+        rule_trip(plan, "plan0"),
+        model_trip(plan, "plan1", False),
+        model_trip(diverse_plan, "plan2", True),
     ]
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        rule_future = pool.submit(rule_trip, plan, "plan0")
-        futures = [(label, pool.submit(primary), fallback) for label, primary, fallback in steps]
-        results = [rule_future.result()]
-        for label, future, fallback in futures:
-            try:
-                results.append(future.result())
-            except Exception:
-                # ERROR 로그는 Sentry 이벤트가 된다. 모델 서버를 못 쓰는 동안 요청마다 이벤트가 쌓이지 않도록 WARNING으로 남긴다
-                logger.warning("모델 경로 실패, 규칙 변형으로 채움: %s", label, exc_info=True)
-                results.append(fallback())
-    return results
 
 
 def group_taste_categories(
