@@ -5,6 +5,7 @@
 //   k6 run -e CONC=1 -e ITER=6 -e TOKEN="$TOKEN" place_selection.js   (N=1, 예열 1 + 측정 5)
 //   k6 run -e CONC=2 -e ITER=6 -e TOKEN="$TOKEN" place_selection.js   (N=2, 예열 1 + 측정 5)
 // cold 측정은 워커가 내려간(Worker states Idle) 것을 확인한 뒤 -e ITER=1 -e WARMUP=0 으로 1회 실행한다.
+// 동시 처리 한도(place_selection_max_concurrency, 기본 6) 확인: -e CONC=8 -e ITER=3 이면 반복마다 6건은 200, 2건은 바로 503이 나와야 한다.
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { check } from 'k6';
@@ -17,6 +18,9 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
 const members = JSON.parse(open('./members.json'));
 
 export const options = {
+  // http.batch는 같은 호스트로 동시에 보내는 요청을 기본 6개로 제한한다(batchPerHost 기본값). CONC건을 모두 동시에 보내려고 CONC로 올린다
+  batch: CONC,
+  batchPerHost: CONC,
   scenarios: {
     repeat: { executor: 'per-vu-iterations', vus: 1, iterations: ITER, maxDuration: '60m' },
   },
