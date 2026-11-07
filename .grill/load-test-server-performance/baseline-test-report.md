@@ -36,7 +36,7 @@
 
 **공통 구조** (코드 기준)
 - DB: 커넥션 풀 없음. `get_connection()`이 호출마다 새 연결을 엶
-- 실패 처리: 오류를 그대로 올려 HTTP 500 반환. 폴백과 서킷 브레이커 없음. GPU 경로 실패 시 `InferenceUnavailable` 발생
+- 실패 처리: 예외를 그대로 전파해 HTTP 500 반환. 폴백과 서킷 브레이커 없음. GPU 경로 실패 시 `InferenceUnavailable` 발생
 - RunPod 호출 timeout: 55초 (코드 변경 없음)
 - 서버: 이벤트 루프 → 스레드풀(anyio 기본 한도 40) → 요청당 스레드 1개. 핸들러는 동기 `def`
 - 코드 검증: baseline·개선 구조 1은 `uv run pytest` 773건 통과·1건 건너뜀, 개선 구조 2는 775건 통과·1건 건너뜀, `uv run ruff check` 통과
@@ -188,7 +188,7 @@
 
 ### 5.4 실패 집계
 
-- 로그로 확인한 500은 총 7건, 모두 같은 지점: plan1의 RunPod 호출이 read timeout 55초 초과 → `InferenceUnavailable("사용 가능한 추론 경로가 없음")` (`inference.py` 148행) → `model_trip(plan, "plan1", False)` (`trip_orchestrator.py` 91행)에서 올라와 HTTP 500 (줄 번호는 baseline 커밋 기준)
+- 로그로 확인한 500은 총 7건, 모두 같은 지점: plan1의 RunPod 호출이 read timeout 55초 초과 → `InferenceUnavailable("사용 가능한 추론 경로가 없음")` (`inference.py` 148행) → `model_trip(plan, "plan1", False)` (`trip_orchestrator.py` 91행)에서 전파되어 HTTP 500 (줄 번호는 baseline 커밋 기준)
   - 측정 2: 2건, 측정 4: 1건, 측정 7: 2건, 측정 8: 2건
 - plan0·plan2 실패와 DB 연결 오류(`TooManyConnectionsError` 등): 0건
 - 7건 모두 각 실행의 첫 요청(예열). 워커가 떠 있는 동안 500 없음
@@ -221,7 +221,7 @@
 
 **구조 변경** (`trip_orchestrator.py`의 `build_trip_plans`, 커밋 `6150791`, `4fca88d` 위의 변경 2개 파일)
 - 3장 "구조별 차이"를 따름
-- 테스트 변경: 순차 실행 확인 테스트 2개 교체 (두 모델 안이 모두 시작되고 예외가 올라가는지, `Barrier(3)`으로 세 안이 서로 다른 스레드에서 동시에 도착하는지)
+- 테스트 변경: 순차 실행 확인 테스트 2개 교체 (두 모델 안이 모두 시작되고 예외가 전파되는지, `Barrier(3)`으로 세 안이 서로 다른 스레드에서 동시에 도착하는지)
 
 **측정 조건** (5.1절과 다른 점)
 - 서버 프로세스 재기동. 코드는 개선 구조 1
