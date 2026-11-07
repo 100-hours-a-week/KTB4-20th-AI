@@ -5,7 +5,7 @@
 //   k6 run -e CONC=1 -e ITER=6 -e TOKEN="$TOKEN" place_selection.js   (N=1, 예열 1 + 측정 5)
 //   k6 run -e CONC=2 -e ITER=6 -e TOKEN="$TOKEN" place_selection.js   (N=2, 예열 1 + 측정 5)
 // cold 측정은 워커가 내려간(Worker states Idle) 것을 확인한 뒤 -e ITER=1 -e WARMUP=0 으로 1회 실행한다.
-// 동시 처리 한도(place_selection_max_concurrency, 기본 16) 확인: -e CONC=18 -e ITER=3 이면 반복마다 16건은 200, 2건은 바로 503이 나와야 한다(호출 약 96개).
+// 줄 세우기(place_selection_queue_capacity, 기본 19) 확인: -e CONC=22 -e ITER=2 이면 반복마다 19건은 줄을 서서 순서대로 200(k번째 약 2.7 × k초), 3건은 바로 503이 나와야 한다(호출 약 76개).
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { check } from 'k6';
