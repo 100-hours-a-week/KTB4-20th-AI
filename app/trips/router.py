@@ -3,6 +3,8 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.auth import verify_internal_token
+from app.core.config import settings
+from app.trips.fifo_gate import FifoGate, QueueFull, QueueWaitTimeout
 from app.trips.schemas.api import (
     E_Response_Status_Code,
     Place_Selection_Request,
@@ -23,6 +25,12 @@ router = APIRouter(
     dependencies=[Depends(verify_internal_token)],
 )
 
+# place-selection 요청을 도착한 순서대로 한 번에 하나씩 처리하는 줄. RunPod 워커가 호출을 하나씩 처리해서 동시에 처리해도 빨라지지 않고
+# 요청마다 대기만 길어진다. 줄이 가득 차면 기다리지 않고, 줄에서 너무 오래 기다리면 줄에서 빼고 503으로 거절한다
+_place_selection_gate = FifoGate(
+    settings.place_selection_queue_capacity, settings.place_selection_queue_max_wait_seconds,
+)
+
 @router.post("/place-selection", response_model=Response[Place_Selection_Response_Data])
 def place_selection(request: Place_Selection_Request) -> Response[Place_Selection_Response_Data]:
     """
@@ -34,14 +42,24 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
     external_factors(precheck 응답)는 요청의 지역과 여행 날짜에 해당하는 has_issue만 읽고, 신호가 있는 날은 야외 후보를 뺀다.
     """
 
-    # 회피조건 취합 (그룹 전체)
-    deal_breakers: list[E_Breaker] = []
-    for member in request.members:
-        deal_breakers.extend(member.deal_breakers)
+    try:
+        with _place_selection_gate.turn():
+            # 회피조건 취합 (그룹 전체)
+            deal_breakers: list[E_Breaker] = []
+            for member in request.members:
+                deal_breakers.extend(member.deal_breakers)
 
-    num_days = (request.end_date - request.start_date).days + 1
-    signal_days = outdoor_excluded_days(request.external_factors, request.region, request.start_date, num_days)
-    data = build_place_selection(request, deal_breakers, num_days, signal_days)
+            num_days = (request.end_date - request.start_date).days + 1
+            signal_days = outdoor_excluded_days(request.external_factors, request.region, request.start_date, num_days)
+            data = build_place_selection(request, deal_breakers, num_days, signal_days)
+    except QueueFull:
+        logger.warning("place-selection 줄이 가득 참(최대 %d건), 503으로 거절", settings.place_selection_queue_capacity)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="줄이 가득 차서 처리할 수 없음") from None
+    except QueueWaitTimeout:
+        logger.warning(
+            "place-selection 줄에서 %.0f초를 넘게 기다려 줄에서 빼고 503으로 거절", settings.place_selection_queue_max_wait_seconds,
+        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="줄에서 기다린 시간이 상한을 넘었음") from None
 
     return Response[Place_Selection_Response_Data](status_code=E_Response_Status_Code.SUCCESS, data=data)
 

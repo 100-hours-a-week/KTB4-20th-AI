@@ -56,10 +56,8 @@ class Settings(BaseSettings):
     generate_deadline_seconds: float = 110.0
 
     # 장소 선정 모델(ADR-0003). 2·3안은 항상 모델 경로로 만들고, 경로가 실패하면 그 안만 규칙 변형으로 채운다(ADR-0010)
-    model_dir: str = ""  # model.onnx와 codes.json이 있는 폴더(CPU 경로)
-    model_cpu_max_concurrency: int = 2
     model_first_place_top_k: int = 30  # 첫 장소를 모델 상위 K곳 중 무작위로 고른다(ADR-0007). 1이면 모델 1위로 고정
-    runpod_model_url: str = Field(default="", repr=False)  # 장소 선정 모델 전용 RunPod 엔드포인트 주소(비어 있으면 GPU 경로를 쓰지 않음)
+    runpod_model_url: str = Field(default="", repr=False)  # 장소 선정 모델 전용 RunPod 엔드포인트 주소(비어 있으면 모델 추론 경로를 만들 수 없음)
     runpod_model_api_key: str = Field(default="", repr=False)
     """
     Metrics 탭 기준 그래프 (2026년 10월 21일 11pm ~ 11:30pm, 15분 간격으로 설정)
@@ -71,8 +69,14 @@ class Settings(BaseSettings):
         - Idel, Throttled, Unhealthy, Initializing: 0
     """
     runpod_model_timeout_seconds: float = 55.0  # 백엔드 → AI 읽기 타임아웃(60초)보다 짧게
-    model_breaker_failures: int = 3  # GPU 호출이 이만큼 연속 실패하면 잠시 막는다
-    model_breaker_cooldown_seconds: float = 60.0
+
+    # place-selection 줄 세우기: 동시에 온 요청을 도착한 순서대로 한 번에 하나씩 처리한다(RunPod 워커 1개가 호출을 하나씩 처리하므로).
+    # capacity: 줄(처리 중 1건 + 대기 중)의 상한. 넘으면 기다리지 않고 바로 503.
+    #   19 = (BE 읽기 타임아웃 60초 − 콜드 스타트 8.5초) ÷ 요청당 2.67초 = 19.3 → 19
+    # max_wait: 줄에서 기다릴 수 있는 시간. 넘으면 줄에서 빼고 503.
+    #   55 = BE 읽기 타임아웃 60초 − 요청 처리 약 2.7초 − 여유 2초 = 55.3 → 55
+    place_selection_queue_capacity: int = Field(default=19, ge=1)
+    place_selection_queue_max_wait_seconds: float = Field(default=55.0, gt=0)
 
     @property
     def allowed_image_hosts_list(self) -> list[str]:
