@@ -70,11 +70,15 @@ class Settings(BaseSettings):
     """
     runpod_model_timeout_seconds: float = 55.0  # 백엔드 → AI 읽기 타임아웃(60초)보다 짧게
 
-    # place-selection을 동시에 처리하는 요청 수 한도. 넘으면 기다리지 않고 바로 503을 돌려준다.
-    # 16: RunPod 워커 1개가 호출을 하나씩 처리하고 요청당 호출이 2개라서, 마지막 요청의 대기는 콜드 스타트 + 2N × 호출당 시간이다.
-    # 이 값이 호출 타임아웃 55초를 넘지 않는 최대 N = (55 − 8.5) ÷ (2 × 1.37) = 16.97 → 16.
-    # (콜드 스타트 8.5초는 Metrics 최대값, 호출당 1.37초는 동시 8건 측정의 최댓값. 동시 16건 측정에서 마지막 요청은 최대 42.62초였다)
-    place_selection_max_concurrency: int = Field(default=16, ge=1)
+    # place-selection 줄 세우기: 동시에 온 요청을 도착한 순서대로 한 번에 하나씩 처리한다(RunPod 워커 1개가 호출을 하나씩 처리하므로).
+    # capacity: 줄(처리 중 1건 + 대기 중)의 상한. 넘으면 기다리지 않고 바로 503.
+    #   9 = floor((대기 상한 55초 − 콜드 스타트 최대 21.48초) ÷ 요청당 서비스 시간 최대 3.65초) = 9.18 → 9
+    #   (지금까지 측정한 최대값 기준: 콜드 스타트 21.48초는 측정 1의 Metrics, 3.65초는 측정 14의 단독 요청 응답 시간)
+    #   9번째 요청이 21.48 + 9 × 3.65 = 54.3초에 끝나 대기 상한 안에 든다(10번째는 58.0초)
+    # max_wait: 줄에서 기다릴 수 있는 시간. 넘으면 줄에서 빼고 503.
+    #   55 = BE 읽기 타임아웃 60초 − 요청 처리 약 2.7초 − 여유 2초 = 55.3 → 55
+    place_selection_queue_capacity: int = Field(default=9, ge=1)
+    place_selection_queue_max_wait_seconds: float = Field(default=55.0, gt=0)
 
     @property
     def allowed_image_hosts_list(self) -> list[str]:

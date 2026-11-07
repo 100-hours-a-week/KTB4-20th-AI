@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.core.config import settings
 from app.core.time import get_service_today
 from app.main import app
+from app.trips.fifo_gate import FifoGate
 from app.trips.schemas.schemas import E_Google_Place_Type
 from app.trips.services import trip_orchestrator, trip_rule
 from app.trips.services.model import runtime
@@ -243,26 +244,54 @@ def test_plans_run_one_after_another_in_the_same_thread(client, monkeypatch):
     assert len({thread for _, thread in events}) == 1  # 세 안이 한 스레드에서 차례로 실행된다
 
 
-def test_place_selection_returns_503_without_waiting_when_the_concurrency_limit_is_full(client, monkeypatch):
+def _hold_gate_turn(gate):
+    """줄의 처리 칸을 잡고 놓지 않는 스레드를 띄운다. release.set()으로 놓는다."""
+    entered, release = threading.Event(), threading.Event()
+
+    def hold():
+        with gate.turn():
+            entered.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    assert entered.wait(2)
+    return release, thread
+
+
+def test_place_selection_returns_503_without_waiting_when_the_queue_is_full(client, monkeypatch):
     from app.trips import router as trips_router
 
-    slots = threading.BoundedSemaphore(1)
-    monkeypatch.setattr(trips_router, "_place_selection_slots", slots)
-    slots.acquire()  # 다른 요청이 처리 중이라 슬롯이 가득 찬 상태
+    gate = FifoGate(capacity=1, max_wait_seconds=5)
+    monkeypatch.setattr(trips_router, "_place_selection_gate", gate)
+    release, holder = _hold_gate_turn(gate)  # 다른 요청이 처리 중이라 줄이 가득 찬 상태
     response = _post(client, _body(days=0))
     assert response.status_code == 503
-    slots.release()
-    assert _post(client, _body(days=0)).status_code == 200  # 슬롯이 비면 다시 처리한다
+    release.set()
+    holder.join()
+    assert _post(client, _body(days=0)).status_code == 200  # 줄이 비면 다시 처리한다
 
 
-def test_place_selection_releases_its_slot_after_success_and_after_failure(client, monkeypatch):
+def test_place_selection_returns_503_when_it_waits_in_the_queue_longer_than_the_limit(client, monkeypatch):
     from app.trips import router as trips_router
 
-    slots = threading.BoundedSemaphore(1)
-    monkeypatch.setattr(trips_router, "_place_selection_slots", slots)
+    gate = FifoGate(capacity=2, max_wait_seconds=0.05)
+    monkeypatch.setattr(trips_router, "_place_selection_gate", gate)
+    release, holder = _hold_gate_turn(gate)
+    response = _post(client, _body(days=0))  # 줄에 서서 0.05초를 기다린 뒤 줄에서 빠진다
+    assert response.status_code == 503
+    assert gate.size == 1  # 기다리던 요청은 줄에서 빠지고 처리 중인 1건만 남는다
+    release.set()
+    holder.join()
+
+
+def test_place_selection_passes_its_turn_on_after_success_and_after_failure(client, monkeypatch):
+    from app.trips import router as trips_router
+
+    gate = FifoGate(capacity=1, max_wait_seconds=5)
+    monkeypatch.setattr(trips_router, "_place_selection_gate", gate)
     assert _post(client, _body(days=0)).status_code == 200
-    assert slots.acquire(blocking=False)  # 성공한 요청이 슬롯을 돌려줬다
-    slots.release()
+    assert gate.size == 0  # 성공한 요청이 차례를 넘겼다
 
     def failing_model(trip_plan, deal_breakers, region, members, router, outdoor_excluded_days, diversity=False, **kwargs):
         raise RuntimeError("모델 경로 실패")
@@ -270,4 +299,4 @@ def test_place_selection_releases_its_slot_after_success_and_after_failure(clien
     _model_mode(monkeypatch, failing_model)
     with pytest.raises(RuntimeError, match="모델 경로 실패"):
         _post(client, _body(days=0))
-    assert slots.acquire(blocking=False)  # 실패한 요청도 슬롯을 돌려줬다
+    assert gate.size == 0  # 실패한 요청도 차례를 넘겼다
