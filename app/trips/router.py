@@ -37,7 +37,7 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
     최대 8박 9일의 일정을 3개 안으로 돌려준다 (ADR-0012). places[일자][장소]는 1안(규칙, 평점 상위 중 시드로 고름, Spring이 재정렬하는 원본)이고,
     routes는 2안 PREFERENCE(모델 경로의 취향 안)와 3안 DIVERSITY(모델 경로의 다양성 안)이다. 각 안은 days[일자][장소]와
     낮 활동 장소 중 취향 상위 2개 카테고리에 속하는 곳 수(preference_count), 속하지 않는 곳 수(discovery_count)를 갖는다.
-    모델 경로가 실패하면 그 안을 규칙 변형으로 채운다.
+    모델 경로가 실패하면 예외를 전파하여 HTTP 503(또는 500) 에러를 반환한다 (ADR-0016).
 
     external_factors(precheck 응답)는 요청의 지역과 여행 날짜에 해당하는 has_issue만 읽고, 신호가 있는 날은 야외 후보를 뺀다.
     """

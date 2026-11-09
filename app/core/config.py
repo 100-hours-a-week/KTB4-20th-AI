@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # 7곳 묶음 한 번이 14~17초라 동시 3묶음이면 한 바퀴 약 17초, 110초면 약 6바퀴(약 144곳)까지로 추정한다. 재시도가 섞이면 줄어든다 (#115, 10/23 운영 로그)
     generate_deadline_seconds: float = 110.0
 
-    # 장소 선정 모델(ADR-0003). 2·3안은 항상 모델 경로로 만들고, 경로가 실패하면 그 안만 규칙 변형으로 채운다(ADR-0010)
+    # 장소 선정 모델(ADR-0003). 2·3안은 항상 모델 경로로 만들고, 경로가 실패하면 예외를 전파하여 HTTP 503(또는 500) 에러를 반환한다(ADR-0016, ADR-0010의 폴백을 대체)
     model_first_place_top_k: int = 30  # 첫 장소를 모델 상위 K곳 중 무작위로 고른다(ADR-0007). 1이면 모델 1위로 고정
     runpod_model_url: str = Field(default="", repr=False)  # 장소 선정 모델 전용 RunPod 엔드포인트 주소(비어 있으면 모델 추론 경로를 만들 수 없음)
     runpod_model_api_key: str = Field(default="", repr=False)
