@@ -88,6 +88,29 @@ def test_v2_prompt_changes_only_the_place_question():
     assert "확신" not in tail_v2
 
 
+def test_v3_prompt_changes_only_the_target_none_line():
+    # 대상 질문의 "none" 경계만 바꾼다. 앞(대상 질문의 enough·short까지)과 뒤(조건·장소 질문)는 v1과 글자까지 같아야 한다
+    from scripts.question_format import (
+        QUESTION_SYSTEM_PROMPT,
+        QUESTION_SYSTEM_PROMPT_V3,
+    )
+
+    head, tail = QUESTION_SYSTEM_PROMPT.split('- "none"')
+    head_v3, tail_v3 = QUESTION_SYSTEM_PROMPT_V3.split('- "none"')
+    assert head_v3 == head
+    assert tail_v3.split("[condition]")[1] == tail.split("[condition]")[1]
+    assert "어느 장소인지 모르는 것은 대상이 없는 것이 아니다" in tail_v3
+
+
+def test_training_examples_use_the_v3_prompt():
+    # 학습 데이터의 지시문은 사람 표시 기준(Q2 경계)과 같은 v3다. 서빙할 때도 이 지시문을 써야 한다
+    from scripts.question_format import QUESTION_SYSTEM_PROMPT_V3
+
+    mission = {"mission_id": "p.jpg#own", "photo": "p.jpg", "place": "경복궁", "mission": "경복궁이 잘 보이게 사진 찍기"}
+    ex = to_example(mission, {"q1": "yes", "q2": "enough", "q3": "na", "q4": "unknown"}, "images/p.jpg")
+    assert ex["system"] == QUESTION_SYSTEM_PROMPT_V3
+
+
 def test_scripts_reuse_the_service_core_unchanged():
     # 서비스(app)와 측정·학습 스크립트가 같은 지시문·스키마·규칙을 써야 측정 결과가 서비스에 그대로 맞는다
     # 해시는 app으로 옮기기 전 값이다. 지시문이나 스키마를 바꾸면 측정·학습 데이터의 해석이 달라지므로 의도한 변경일 때만 고친다
@@ -110,4 +133,5 @@ def test_scripts_reuse_the_service_core_unchanged():
         {"q1": "yes", "q2": "short", "q3": "na", "q4": "unknown", "mission_id": "m"},
         "a.jpg",
     )
-    assert sha(json.dumps(example, sort_keys=True, ensure_ascii=False)) == "5819d5c5def7"
+    # 학습 예제는 v3 지시문을 쓴다(2026-10-26, 대상 질문 none 경계). 서비스 지시문 해시(위)는 그대로다
+    assert sha(json.dumps(example, sort_keys=True, ensure_ascii=False)) == "3cba6b75dd48"

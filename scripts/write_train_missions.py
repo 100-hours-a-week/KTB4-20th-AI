@@ -2,6 +2,7 @@
 
 build_train_pilot.py가 뽑은 사진(manifest.jsonl)에 세 가지 방법으로 미션을 붙인다. 정답은 나중에 사람이 표시한다.
   photo_written    사진을 보고 미션을 쓴다. 카테고리마다 4개, 그중 2개는 사진에서 확인되는 조건을 꼭 넣는다
+                   (조건을 넣으라고 시켰는데 못 씀이면 같은 사진으로 시키지 않고 한 번 더 쓴다, mission_id #pw_plain)
   condition_swap   조건을 넣은 photo_written 미션에서 조건 하나만 바꿔, 이 사진이 지키지 않은 조건으로 만든다 (같은 사진)
   service_generate 서비스 generate로 장소만 보고 미션을 만든다 (실제 서비스와 같은 프롬프트·모델)
 미션을 쓰는 모델은 비교 대상이 아닌 모델이다 (write_photo_missions.WRITER_MODEL, 서비스 generate 모델).
@@ -10,6 +11,13 @@ build_train_pilot.py가 뽑은 사진(manifest.jsonl)에 세 가지 방법으로
   uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/pilot --aihub /Volumes/T7/aihub --dry-run
   # 실제 호출 (Gemini 비용 발생)
   uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/pilot --aihub /Volumes/T7/aihub
+
+  # 550개: 1차는 조건 바꾸기 없이, 사람이 표시한 뒤 --labels로 다시 돌려 성공 미션에서만 바꾼다
+  uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/run550 --aihub /Volumes/T7/aihub --pw-per-category 24 --skip-swap
+
+  # 550개 보강(2026-11-05): 예비 목록(general_spare.jsonl)도 읽고, 사진 보고 쓰기 목표를 올려 예비 사진까지 쓴다
+  uv run python -m scripts.write_train_missions --pilot-dir /Volumes/T7/aihub/train/run550 --aihub /Volumes/T7/aihub \\
+      --extra-manifest /Volumes/T7/aihub/train/run550/general_spare.jsonl --pw-per-category 30 --skip-swap --dry-run
 
   결과는 pilot-dir/missions.jsonl에 미션 1개당 한 줄로 쌓인다. 다시 실행하면 이미 만든 미션은 건너뛴다.
 
@@ -22,7 +30,7 @@ import asyncio
 import json
 import pathlib
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from fastapi import HTTPException
 from google.genai import types
@@ -88,13 +96,36 @@ def conflicts(mission: str) -> bool:
     return "다 같이" in mission and "가까이" in mission
 
 
-def pw_mode(records: list[dict]) -> str | None:
+def pw_mode(records: list[dict], cond: int = PW_COND, plain: int = PW_PLAIN) -> str | None:
     # 한 카테고리의 photo_written 기록을 보고 다음 사진에 쓸 방식을 정한다. 다 채웠으면 None
     usable = [r for r in records if r["source"] == "photo_written" and r.get("usable")]
-    if sum(r["with_condition"] for r in usable) < PW_COND:
+    if sum(r["with_condition"] for r in usable) < cond:
         return "with_condition"
-    if sum(not r["with_condition"] for r in usable) < PW_PLAIN:
+    if sum(not r["with_condition"] for r in usable) < plain:
         return "plain"
+    return None
+
+
+def pw_counts(records: list[dict]) -> dict[str, int]:
+    usable = [r for r in records if r["source"] == "photo_written" and r.get("usable")]
+    return {"조건 강제": sum(r["with_condition"] for r in usable), "비강제": sum(not r["with_condition"] for r in usable)}
+
+
+def pw_next(photo: str, records: list[dict], tried: set[str], cond: int = PW_COND, plain: int = PW_PLAIN) -> str | None:
+    # 이 사진에 다음으로 할 사진 보고 쓰기 호출. None이면 이 사진은 끝
+    # with_condition은 "조건을 꼭 넣으라고 시킨 호출"이고, plain은 시키지 않은 호출이다. plain 미션에도 조건이 들어갈 수 있다
+    # 550개 1차(2026-10-30): 역사·문화는 건물만 찍힌 사진이 많아 조건 강제 호출이 10장 중 9장 못 씀이었다.
+    # 그대로 두면 조건 강제 칸이 안 차서 사진을 다 써 버리므로, 못 씀이면 같은 사진으로 plain을 한 번 더 시도한다
+    mode = pw_mode(records, cond, plain)
+    if mode is None:
+        return None
+    first = next((r for r in records if r["mission_id"] == f"{photo}#pw"), None)
+    if f"{photo}#pw" not in tried:
+        return mode
+    plain_left = sum(not r["with_condition"] for r in records if r["source"] == "photo_written" and r.get("usable")) < plain
+    if (first and first["with_condition"] and not first.get("usable") and f"{photo}#pw_plain" not in tried
+            and plain_left):
+        return "plain_rescue"
     return None
 
 
@@ -135,10 +166,21 @@ async def main() -> None:
     ap.add_argument("--labels", type=pathlib.Path,
                     help="파일럿 표시 결과. 주면 사람이 성공으로 표시한 미션에서만 조건을 바꾼다 (2차)")
     ap.add_argument("--max-calls", type=int, default=0, help="이번 실행의 최대 호출 수 (0이면 제한 없음)")
+    ap.add_argument("--pw-per-category", type=int, default=PW_COND + PW_PLAIN,
+                    help="카테고리마다 사진 보고 쓰기 미션 수. 절반은 조건을 넣는다 (파일럿 4, 550개용 24)")
+    ap.add_argument("--skip-swap", action="store_true",
+                    help="조건 바꾸기를 건너뛴다. 550개는 사람이 성공으로 표시한 뒤 --labels로 다시 돌려 바꾼다")
+    ap.add_argument("--extra-manifest", type=pathlib.Path, action="append", default=[],
+                    help="manifest.jsonl 뒤에 이어 읽을 사진 목록 (예비 목록, 여러 번 가능)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    rows = [json.loads(line) for line in (args.pilot_dir / "manifest.jsonl").read_text(encoding="utf-8").splitlines() if line]
+    rows = []
+    for path in [args.pilot_dir / "manifest.jsonl", *args.extra_manifest]:
+        rows += [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    dup = sorted(p for p, n in Counter(r["photo"] for r in rows).items() if n > 1)
+    if dup:  # 같은 사진이 두 목록에 있으면 같은 미션 ID가 두 번 생긴다
+        ap.error(f"사진 목록 두 곳에 같은 사진 {len(dup)}장 (예: {dup[:3]})")
     out = args.pilot_dir / "missions.jsonl"
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines() if line] if out.exists() else []
     records = [r for r in records if "error" not in r]  # 에러 난 것은 다시 호출한다
@@ -149,15 +191,22 @@ async def main() -> None:
 
     gen_rows = [r for r in rows if r["role"] == "service_generate" and f"{r['photo']}#gen" not in done_ids]
     gen_batches = make_batches(gen_rows, batch_size=5, seed=20261010)
-    pw_left = {c: pw_mode(by_cat[c]) for c in TRAIN_CATEGORIES}
+    pw_cond = args.pw_per_category // 2
+    pw_plain = args.pw_per_category - pw_cond
+    pw_left = {c: pw_mode(by_cat[c], pw_cond, pw_plain) for c in TRAIN_CATEGORIES}
     success_ids = None
     if args.labels:
         items = json.loads(args.labels.read_text(encoding="utf-8"))["items"]
         success_ids = {x["mission_id"] for x in items if x.get("final_grade") == "success"}
     print(f"사진 {len(rows)}장 · 지금까지 미션 {len(records)}개")
     print(f"사진 보고 쓰기: 아직 덜 채운 카테고리 {[c for c, m in pw_left.items() if m]}")
-    print(f"조건 바꾸기: 지금 바꿀 수 있는 미션 {len(swap_targets(records, success_ids))}개"
-          + (" (사람이 성공으로 표시한 미션에서만)" if success_ids is not None else " (사진 보고 쓰기가 끝나면 늘어남)"))
+    for c in TRAIN_CATEGORIES:
+        print(f"  {c}: {pw_counts(by_cat[c])}")
+    if args.skip_swap:
+        print("조건 바꾸기: 이번엔 건너뜀 (--skip-swap)")
+    else:
+        print(f"조건 바꾸기: 지금 바꿀 수 있는 미션 {len(swap_targets(records, success_ids))}개"
+              + (" (사람이 성공으로 표시한 미션에서만)" if success_ids is not None else " (사진 보고 쓰기가 끝나면 늘어남)"))
     print(f"서비스 미션: 남은 사진 {len(gen_rows)}장 → generate {len(gen_batches)}회")
     if args.dry_run:
         return
@@ -166,7 +215,10 @@ async def main() -> None:
     zips: dict[str, zipfile.ZipFile] = {}
 
     def image_of(row: dict) -> bytes:
-        return zips.setdefault(row["zip"], zipfile.ZipFile(args.aihub / row["zip"])).read(row["member"])
+        # setdefault는 키가 있어도 ZipFile을 먼저 열어 버리므로 직접 확인한다
+        if row["zip"] not in zips:
+            zips[row["zip"]] = zipfile.ZipFile(args.aihub / row["zip"])
+        return zips[row["zip"]].read(row["member"])
 
     def budget_left() -> bool:
         return not args.max_calls or calls < args.max_calls
@@ -179,30 +231,34 @@ async def main() -> None:
                 records.append(record)
                 by_cat[record["category"]].append(record)
 
-        # 1) 사진 보고 쓰기: 카테고리마다 예비 사진까지 순서대로, 4개를 채우면 멈춘다
+        # 1) 사진 보고 쓰기: 카테고리마다 예비 사진까지 순서대로, --pw-per-category개를 채우면 멈춘다
+        #    조건 강제 칸이 덜 찼어도 사진을 다 쓰면 멈추고 부족한 채로 둔다 (조건을 억지로 만들지 않는다)
         for category in TRAIN_CATEGORIES:
             for row in (r for r in rows if r["category"] == category and r["role"] == "photo_written"):
-                mode = pw_mode(by_cat[category])
-                if mode is None or not budget_left():
+                if pw_mode(by_cat[category], pw_cond, pw_plain) is None:
                     break
-                if f"{row['photo']}#pw" in done_ids:
-                    continue
-                record = {**_base(row), "mission_id": f"{row['photo']}#pw", "source": "photo_written",
-                          "parent_mission_id": None, "with_condition": mode == "with_condition", "model": WRITER_MODEL}
-                try:
-                    written = await write_one({**row, "category_ko": CATEGORY_KO[category]}, image_of(row),
-                                              WITH_CONDITION if mode == "with_condition" else "")
-                    record.update(usable=written.usable, mission=written.mission.strip())
-                except Exception as e:  # noqa: BLE001 — 데이터 만드는 스크립트라 실패도 기록하고 넘어간다
-                    record["error"] = f"{type(e).__name__}: {e}"
-                calls += 1
-                save(record)
-                print(f"[쓰기] {CATEGORY_KO[category]} {row['place_name']} ({mode}): "
-                      f"{record.get('error') or (record['mission'] if record['usable'] else '(못 씀)')}")
+                while budget_left() and (mode := pw_next(row["photo"], by_cat[category], done_ids, pw_cond, pw_plain)):
+                    mission_id = f"{row['photo']}#pw_plain" if mode == "plain_rescue" else f"{row['photo']}#pw"
+                    done_ids.add(mission_id)  # 이번 실행에서 에러가 나도 같은 호출을 되풀이하지 않는다
+                    record = {**_base(row), "mission_id": mission_id, "source": "photo_written",
+                              "parent_mission_id": None, "with_condition": mode == "with_condition",
+                              "model": WRITER_MODEL}
+                    try:
+                        written = await write_one({**row, "category_ko": CATEGORY_KO[category]}, image_of(row),
+                                                  WITH_CONDITION if mode == "with_condition" else "")
+                        record.update(usable=written.usable, mission=written.mission.strip())
+                    except Exception as e:  # noqa: BLE001 — 데이터 만드는 스크립트라 실패도 기록하고 넘어간다
+                        record["error"] = f"{type(e).__name__}: {e}"
+                    calls += 1
+                    save(record)
+                    print(f"[쓰기] {CATEGORY_KO[category]} {row['place_name']} ({mode}): "
+                          f"{record.get('error') or (record['mission'] if record['usable'] else '(못 씀)')}")
+            print(f"[쓰기] {CATEGORY_KO[category]} 채운 수: {pw_counts(by_cat[category])} "
+                  f"(목표 조건 강제 {pw_cond} · 비강제 {pw_plain})")
 
         # 2) 조건 바꾸기: 원래 미션마다 1개. 바꿀 조건은 SWAP_ORDER를 돌아가며 정한다
         row_of = {r["photo"]: r for r in rows}
-        for i, parent in enumerate(swap_targets(records, success_ids)):
+        for i, parent in enumerate([] if args.skip_swap else swap_targets(records, success_ids)):
             if not budget_left():
                 break
             row = row_of[parent["photo"]]
