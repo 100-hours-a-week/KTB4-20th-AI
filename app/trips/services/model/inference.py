@@ -1,15 +1,13 @@
-"""모델 추론 경로: RunPod GPU, 컨테이너 CPU, 그리고 둘을 잇는 폴백 (ADR-0004).
+"""모델 추론 경로: RunPod GPU와 오프라인 도구용 CPU 엔진 (ADR-0004).
 
-  - CPU 경로: ONNX Runtime으로 AI 서버 컨테이너 안에서 추론한다.
   - GPU 경로: RunPod Serverless 엔드포인트(모델 전용)에 슬롯별 후보 목록을 보내 일정 전체를 받는다.
-  - 라우터: GPU를 먼저 시도하고 타임아웃이나 오류가 나면 CPU로 넘긴다. 연속 실패가 쌓이면 일정 시간 GPU 호출을 막는다(서킷 브레이커).
-    CPU 동시 실행 수에 상한을 둬서 폴백이 몰려도 서버를 못 쓰게 되지 않게 한다.
+  - CPU 엔진: ONNX Runtime으로 로컬에서 추론한다. 서비스는 쓰지 않고 오프라인 검증·측정 스크립트(scripts/)만 쓴다.
+  - 라우터: GPU가 있으면 GPU만 쓰고, 실패해도 CPU로 넘기지 않는다(CPU 폴백 없음).
 """
 
 import json
 import logging
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -121,34 +119,12 @@ class RunPodEngine:
         return body.get("output") or {}
 
 
-class CircuitBreaker:
-    def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 60.0, clock: Callable[[], float] = time.monotonic):
-        self.failure_threshold, self.cooldown, self.clock = failure_threshold, cooldown_seconds, clock
-        self.failures, self.opened_at = 0, None
-        self._lock = threading.Lock()
-
-    def allow(self) -> bool:
-        with self._lock:
-            if self.opened_at is None:
-                return True
-            return self.clock() - self.opened_at >= self.cooldown  # 쿨다운이 지나면 한 번 시험 호출을 허용한다
-
-    def record_success(self) -> None:
-        with self._lock:
-            self.failures, self.opened_at = 0, None
-
-    def record_failure(self) -> None:
-        with self._lock:
-            self.failures += 1
-            if self.failures >= self.failure_threshold:
-                self.opened_at = self.clock()
-
-
 class InferenceRouter:
-    """GPU 우선, 실패하면 CPU. 어느 경로가 썼는지 route를 함께 돌려준다."""
+    """GPU가 있으면 GPU만 쓴다(실패해도 CPU로 폴백하지 않음). GPU 없이 CPU 엔진만 넘기면 CPU로 추론한다(오프라인 스크립트용).
+    어느 경로가 썼는지 route를 함께 돌려준다. 부하 테스트 baseline: 서킷 브레이커 없이 매번 GPU를 부른다."""
 
-    def __init__(self, gpu: RunPodEngine | None, cpu: LocalEngine | None, breaker: CircuitBreaker | None = None):
-        self.gpu, self.cpu, self.breaker = gpu, cpu, breaker or CircuitBreaker()
+    def __init__(self, gpu: RunPodEngine | None, cpu: LocalEngine | None = None):
+        self.gpu, self.cpu = gpu, cpu
 
     def generate(
         self, header: list[int], slot_candidates: list[list[str]], width: int = BEAM_WIDTH, first_k: int = 1, seed: int | None = None,
@@ -162,14 +138,12 @@ class InferenceRouter:
         return self._route(lambda engine: engine.generate_trip(header, pools, days, width, first_k, seed))
 
     def _route(self, run: Callable):
-        if self.gpu is not None and self.breaker.allow():
+        if self.gpu is not None:
             try:
-                result = run(self.gpu)
-                self.breaker.record_success()
-                return result, "gpu"
+                return run(self.gpu), "gpu"
             except InferenceUnavailable as error:
-                self.breaker.record_failure()
-                logger.warning("GPU 경로 실패, CPU로 폴백: %s", error)
-        if self.cpu is not None:
+                logger.warning("GPU 경로 실패: %s", error)
+                raise InferenceUnavailable("사용 가능한 추론 경로가 없음") from error
+        if self.cpu is not None:  # GPU 없이 CPU 엔진만 넘긴 경우(오프라인 스크립트)
             return run(self.cpu), "cpu"
         raise InferenceUnavailable("사용 가능한 추론 경로가 없음")

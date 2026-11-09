@@ -33,6 +33,21 @@ _PLACE_V2 = """\
 assert QUESTION_SYSTEM_PROMPT.count(_PLACE_V1) == 1
 QUESTION_SYSTEM_PROMPT_V2 = QUESTION_SYSTEM_PROMPT.replace(_PLACE_V1, _PLACE_V2)
 
+# v3: 대상 질문(target)의 "none" 경계만 바꾼 학습·측정용 지시문. 나머지는 서비스 지시문(v1)과 글자까지 같다
+# 장소가 대상인 미션에서 어느 장소인지 모르는 사진을 "none"(→ 실패)으로 답하지 않게, 외형은 target·정체는 place로 나눈다
+# (label_criteria.md 3절 "장소가 대상인 미션의 Q2·Q4", 2026-10-26). 서비스는 학습 모델로 바꿀 때 이 지시문으로 함께 바꾼다
+_TARGET_NONE_V1 = """\
+- "none": 대상이 아예 없다. 이때 condition은 null로 둔다.
+"""
+_TARGET_NONE_V3 = """\
+- "none": 대상이 사진에 없다고 알 수 있다. 이때 condition은 null로 둔다.
+  목표 장소 자체가 대상인 미션에서는 목표 장소일 수 있는 모습(건물·다리·해변 등)이 얼마나 보이는지로 enough/short를 답하고,
+  그 모습이 정말 목표 장소인지는 place에서 답한다. 어느 장소인지 모르는 것은 대상이 없는 것이 아니다.
+  다른 장소가 함께 보인다는 이유만으로 "none"이라 하지 않는다.
+"""
+assert QUESTION_SYSTEM_PROMPT.count(_TARGET_NONE_V1) == 1
+QUESTION_SYSTEM_PROMPT_V3 = QUESTION_SYSTEM_PROMPT.replace(_TARGET_NONE_V1, _TARGET_NONE_V3)
+
 
 def normalize(label: dict) -> QuestionAnswer:
     # 표시 화면의 q1~q4를 학습 형식으로 바꾼다. 물을 수 없는 질문은 null로 맞춘다
@@ -54,9 +69,10 @@ def user_text(target_place: str, mission: str) -> str:
 
 def to_example(mission: dict, label: dict, image_path: str) -> dict:
     # LLaMA-Factory sharegpt 형식 한 건. 모델이 받는 장소는 미션의 목표 장소다 (다른 장소 미션이면 target_place)
+    # 지시문은 v3 (사람 표시 기준과 같은 Q2 경계). 학습 모델을 서빙할 때도 같은 지시문을 써야 한다
     answer = normalize(label)
     return {
-        "system": QUESTION_SYSTEM_PROMPT,
+        "system": QUESTION_SYSTEM_PROMPT_V3,
         "messages": [
             {"role": "user", "content": user_text(mission.get("target_place") or mission["place"], mission["mission"]) + "\n<image>"},
             {"role": "assistant", "content": json.dumps(answer.model_dump(), ensure_ascii=False)},

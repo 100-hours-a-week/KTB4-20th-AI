@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1522" viewBox="0 0 1600 1522" font-family="'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif">
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#555"/></marker>
+  <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0504d"/></marker>
+</defs>
+<rect width="1600" height="1522" fill="#ffffff"/>
+<text x="40" y="52" font-size="28" font-weight="700" fill="#222" text-anchor="start">개선 구조 4 — 서비스 시간 최대값으로 줄 상한을 정한 줄 세우기 (줄 상한 15)</text>
+<text x="40" y="84" font-size="15" font-weight="400" fill="#666" text-anchor="start">ECS AI Task 1개 가정(0.5 vCPU, 1GB) · uvicorn 프로세스 1개 · POST /trips/place-selection · 개선 구조 3의 줄 세우기(FIFO)에서 줄 상한만 9에서 15로 변경 · 각 사각형은 함수처럼 입력과 출력을 적음</text>
+<text x="40" y="112" font-size="14" font-weight="400" fill="#c26a00" text-anchor="start">주황 점선: 개선 구조 3에서 바뀐 부분 (줄 상한 9건 → 15건, 55 ÷ 3.65 = 15.07, 넘으면 즉시 503)</text>
+<g transform="translate(0,-118)">
+<rect x="30" y="340" width="240" height="250" rx="10" fill="#eef3fb" stroke="#5b7db1" stroke-width="2"/>
+<text x="150" y="372" font-size="18" font-weight="700" fill="#2b4a7a" text-anchor="middle">k6 / BE</text>
+<text x="150" y="396" font-size="12" font-weight="400" fill="#333" text-anchor="middle" font-family="Menlo,monospace">POST /trips/place-selection</text>
+<text x="46" y="430" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>동시 요청 수 N, 지역·날짜·</text>
+<text x="46" y="447" font-size="13" fill="#333" text-anchor="start">구성원 정보 (k6: 가상 사용자</text>
+<text x="46" y="464" font-size="13" fill="#333" text-anchor="start">N명이 1번씩)</text>
+<text x="46" y="493" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>일정 생성 요청 N건 전송,</text>
+<text x="46" y="510" font-size="13" fill="#333" text-anchor="start">응답 상태와 응답 시간 기록</text>
+</g>
+<rect x="310" y="130" width="800" height="1150" rx="14" fill="#f6fbf3" stroke="#6a9a52" stroke-width="2.5"/>
+<text x="332" y="160" font-size="19" font-weight="700" fill="#3e6b2a" text-anchor="start">AI 서버 (ECS Task 1개 · uvicorn 1프로세스)</text>
+<text x="332" y="184" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>일정 생성 요청 1건 (지역, 시작·종료일, 구성원 설문·회피조건, 날씨 신호)</text>
+<text x="332" y="204" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>3개 안(1안 places, 2·3안 routes)과 HTTP 200, 예상 완료 시각이 55초를 넘거나 대기가 길면 HTTP 503, 오류가 나면 HTTP 500</text>
+<rect x="330" y="222" width="760" height="120" rx="8" fill="#ffffff" stroke="#8a9a8a" stroke-width="1.5"/>
+<text x="350" y="248" font-size="16" font-weight="700" fill="#333" text-anchor="start">uvicorn 이벤트 루프 (프로세스 1개 · 스레드 1개)</text>
+<text x="350" y="270" font-size="13" font-weight="400" fill="#444" text-anchor="start">처리: 연결 수락, 요청 본문 검증, 동기 핸들러는 스레드풀에 맡김 (기다리는 요청은 CPU를 쓰지 않음)</text>
+<text x="350" y="292" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>도착한 HTTP 요청 N건</text>
+<text x="350" y="310" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>스레드풀에 맡긴 핸들러 호출 N건, 처리가 끝난 요청의 응답 반환</text>
+<line x1="270" y1="272" x2="330" y2="272" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="350" y="332" font-size="12" font-weight="400" fill="#9a2f2c" text-anchor="start">구현: uvloop(설치된 경우). 로컬 .venv에는 설치됨, 배포 이미지는 확인하지 못함</text>
+<line x1="710" y1="342" x2="710" y2="364" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="724" y="358" font-size="13" font-weight="400" fill="#555" text-anchor="start">동기 핸들러라서 스레드풀로 넘김</text>
+<g transform="translate(0,144)">
+<rect x="330" y="222" width="760" height="112" rx="8" fill="#ffffff" stroke="#8a9a8a" stroke-width="1.5"/>
+<text x="350" y="250" font-size="16" font-weight="700" fill="#333" text-anchor="start">요청 처리 스레드풀 (anyio 기본 상한 40)</text>
+<text x="350" y="274" font-size="14" font-weight="400" fill="#444" text-anchor="start">요청 1건 = 스레드 1개 · 줄에 선 요청(예상 완료 55초 이내, 최대 15건)이 스레드를 점유한 채 대기</text>
+<text x="350" y="298" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>도착한 요청 1건</text>
+<text x="350" y="318" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>그 요청을 처리할 스레드 1개 (동시 실행 40건을 넘는 요청은 대기)</text>
+<rect x="330" y="354" width="760" height="762" rx="8" fill="#ffffff" stroke="#8a9a8a" stroke-width="1.5"/>
+<text x="350" y="382" font-size="16" font-weight="700" fill="#333" text-anchor="start">한 요청의 처리: 한 스레드에서 위에서 아래로 차례로 실행</text>
+<rect x="360" y="398" width="480" height="94" rx="8" fill="#fff4e0" stroke="#e8820c" stroke-width="2.5" stroke-dasharray="7 4"/>
+<text x="378" y="420" font-size="16" font-weight="700" fill="#a85a00" text-anchor="start">⓪ 입장 판단 + 줄 서기 (변경, FIFO, 한 번에 1건)</text>
+<text x="378" y="442" font-size="13" font-weight="400" fill="#333" text-anchor="start">처리: 예상 완료 = (앞 요청 수 + 1) × 3.65초 ≤ 55초면 줄을 서서 차례를 기다림</text>
+<text x="378" y="462" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>줄 길이(처리 중 + 대기 중), 서비스 시간 최대값 3.65초</text>
+<text x="378" y="480" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>차례가 오면 진행, 예상 55초 초과·대기 초과는 503</text>
+<line x1="840" y1="444" x2="880" y2="444" stroke="#c0504d" stroke-width="2.5" marker-end="url(#arrowRed)"/>
+<text x="860" y="436" font-size="12" font-weight="400" fill="#9a2f2c" text-anchor="middle">초과</text>
+<rect x="880" y="398" width="190" height="94" rx="8" fill="#fdeeee" stroke="#e8820c" stroke-width="2.5" stroke-dasharray="7 4"/>
+<text x="975" y="420" font-size="16" font-weight="700" fill="#9a2f2c" text-anchor="middle">거절 (변경)</text>
+<text x="975" y="442" font-size="12" font-weight="400" fill="#333" text-anchor="middle">예상 55초 초과(16번째~): 즉시</text>
+<text x="975" y="462" font-size="12" font-weight="400" fill="#333" text-anchor="middle">대기 55초 초과: 줄에서 제외(유지)</text>
+<text x="975" y="480" font-size="12" fill="#333" text-anchor="middle"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>HTTP 503</text>
+<line x1="600" y1="494" x2="600" y2="520" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="588" y="510" font-size="13" font-weight="400" fill="#2f5a1e" text-anchor="end">차례가 오면 처리 시작</text>
+<g transform="translate(0,124)">
+<rect x="360" y="398" width="480" height="136" rx="8" fill="#e8f3e0" stroke="#6a9a52" stroke-width="1.5"/>
+<text x="378" y="422" font-size="16" font-weight="700" fill="#2f5a1e" text-anchor="start">① plan0 규칙 경로 (1안)</text>
+<text x="378" y="444" font-size="13" font-weight="400" fill="#333" text-anchor="start">처리: 후보 DB 조회: 호출마다 연결 열기 → 쿼리 → 닫기</text>
+<text x="378" y="466" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>요청의 지역·구성원·회피조건, 일정 슬롯 계획,</text>
+<text x="378" y="483" font-size="13" fill="#333" text-anchor="start">요청 시드(plan0용)</text>
+<text x="378" y="506" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>규칙으로 고른 1안 [일자][장소]</text>
+<text x="378" y="523" font-size="13" fill="#333" text-anchor="start">(DB 오류가 나면 예외)</text>
+<line x1="840" y1="466" x2="880" y2="466" stroke="#c0504d" stroke-width="2.5" marker-end="url(#arrowRed)"/>
+<text x="860" y="458" font-size="12" font-weight="400" fill="#9a2f2c" text-anchor="middle">실패</text>
+<rect x="360" y="566" width="480" height="136" rx="8" fill="#e8f3e0" stroke="#6a9a52" stroke-width="1.5"/>
+<text x="378" y="590" font-size="16" font-weight="700" fill="#2f5a1e" text-anchor="start">② plan1 모델 경로 (취향 2안)</text>
+<text x="378" y="612" font-size="13" font-weight="400" fill="#333" text-anchor="start">처리: 후보 DB 조회 → RunPod /runsync 1회, 응답 대기 최대 55초</text>
+<text x="378" y="634" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>같은 슬롯 계획, 요청 시드(plan1용),</text>
+<text x="378" y="651" font-size="13" fill="#333" text-anchor="start">DB에서 가져온 후보 장소 목록, 구성원 취향</text>
+<text x="378" y="674" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>모델이 고른 취향 2안 [일자][장소]</text>
+<text x="378" y="691" font-size="13" fill="#333" text-anchor="start">(RunPod 실패·형식 오류·무효 결과면 예외)</text>
+<line x1="840" y1="634" x2="880" y2="634" stroke="#c0504d" stroke-width="2.5" marker-end="url(#arrowRed)"/>
+<text x="860" y="626" font-size="12" font-weight="400" fill="#9a2f2c" text-anchor="middle">실패</text>
+<rect x="360" y="734" width="480" height="136" rx="8" fill="#e8f3e0" stroke="#6a9a52" stroke-width="1.5"/>
+<text x="378" y="758" font-size="16" font-weight="700" fill="#2f5a1e" text-anchor="start">③ plan2 모델 경로 (다양성 3안)</text>
+<text x="378" y="780" font-size="13" font-weight="400" fill="#333" text-anchor="start">처리: 후보 DB 조회 → RunPod /runsync 1회, 응답 대기 최대 55초</text>
+<text x="378" y="802" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>다양성 슬롯 계획(3·4위 카테고리 추가),</text>
+<text x="378" y="819" font-size="13" fill="#333" text-anchor="start">요청 시드(plan2용), 후보 장소 목록, 구성원 취향</text>
+<text x="378" y="842" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>모델이 고른 다양성 3안 [일자][장소]</text>
+<text x="378" y="859" font-size="13" fill="#333" text-anchor="start">(실패 조건은 plan1과 같음)</text>
+<line x1="840" y1="802" x2="880" y2="802" stroke="#c0504d" stroke-width="2.5" marker-end="url(#arrowRed)"/>
+<text x="860" y="794" font-size="12" font-weight="400" fill="#9a2f2c" text-anchor="middle">실패</text>
+<line x1="600" y1="534" x2="600" y2="564" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="588" y="554" font-size="13" font-weight="400" fill="#2f5a1e" text-anchor="end">성공하면 다음 단계 시작</text>
+<line x1="600" y1="702" x2="600" y2="732" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="588" y="722" font-size="13" font-weight="400" fill="#2f5a1e" text-anchor="end">성공하면 다음 단계 시작</text>
+<line x1="600" y1="870" x2="600" y2="900" stroke="#555" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="588" y="890" font-size="13" font-weight="400" fill="#2f5a1e" text-anchor="end">성공</text>
+<rect x="360" y="902" width="480" height="76" rx="8" fill="#ffffff" stroke="#6a9a52" stroke-width="2"/>
+<text x="378" y="926" font-size="16" font-weight="700" fill="#2f5a1e" text-anchor="start">성공: 3개 안으로 응답</text>
+<text x="378" y="948" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>plan0, plan1, plan2가 만든 3개 안</text>
+<text x="378" y="966" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>places·routes 응답, HTTP 200</text>
+<rect x="880" y="398" width="190" height="462" rx="8" fill="#fdeeee" stroke="#c0504d" stroke-width="2"/>
+<text x="975" y="430" font-size="17" font-weight="700" fill="#9a2f2c" text-anchor="middle">오류</text>
+<text x="975" y="470" font-size="13" font-weight="400" fill="#333" text-anchor="middle">처리: 예외를 규칙으로</text>
+<text x="975" y="490" font-size="13" font-weight="400" fill="#333" text-anchor="middle">채우지 않고 그대로 전파함,</text>
+<text x="975" y="510" font-size="13" font-weight="400" fill="#333" text-anchor="middle">뒤 단계는 실행하지 않음</text>
+<text x="975" y="560" font-size="13" font-weight="700" fill="#1f4e8c" text-anchor="middle">입력:</text>
+<text x="975" y="580" font-size="13" font-weight="400" fill="#333" text-anchor="middle">plan0·plan1·plan2 중</text>
+<text x="975" y="600" font-size="13" font-weight="400" fill="#333" text-anchor="middle">한 곳에서 난 예외</text>
+<text x="975" y="650" font-size="13" font-weight="700" fill="#2f5a1e" text-anchor="middle">출력:</text>
+<text x="975" y="670" font-size="13" font-weight="400" fill="#333" text-anchor="middle">AI 서버 HTTP 500</text>
+<text x="975" y="690" font-size="13" font-weight="400" fill="#333" text-anchor="middle">BE가 503으로 변환</text>
+<text x="975" y="712" font-size="12" font-weight="400" fill="#9a2f2c" text-anchor="middle">(클라우드 팀 보고 기준,</text>
+<text x="975" y="728" font-size="12" font-weight="400" fill="#9a2f2c" text-anchor="middle">직접 확인하지 못함)</text>
+</g>
+</g>
+<g transform="translate(0,144)">
+<rect x="1210" y="222" width="360" height="300" rx="10" fill="#f3ecfa" stroke="#8a63b0" stroke-width="2"/>
+<text x="1230" y="254" font-size="18" font-weight="700" fill="#5a3a80" text-anchor="start">RDS MySQL</text>
+<text x="1230" y="282" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>연결 1개로 쿼리 1건</text>
+<text x="1230" y="299" font-size="13" fill="#333" text-anchor="start">(지역·카테고리별 후보 장소 조회)</text>
+<text x="1230" y="326" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>후보 장소 행 목록</text>
+<text x="1230" y="343" font-size="13" fill="#333" text-anchor="start">(연결 한도를 넘으면 연결 거부)</text>
+<text x="1230" y="380" font-size="13" font-weight="400" fill="#333" text-anchor="start">max_connections 60, 기동 이후 최대 사용 34</text>
+<text x="1230" y="400" font-size="13" font-weight="400" fill="#333" text-anchor="start">연결 풀 없음: 열린 연결 수 = 동시 쿼리 수</text>
+<text x="1230" y="420" font-size="13" font-weight="400" fill="#333" text-anchor="start">한 번에 한 요청만 처리해 최대 1개 연결</text>
+<text x="1230" y="440" font-size="13" font-weight="400" fill="#333" text-anchor="start">요청 1건당 연결 10회 열고 닫음 (로컬 측정,</text>
+<text x="1230" y="460" font-size="13" font-weight="400" fill="#333" text-anchor="start">모델 경로 자리에 규칙 대역을 둔 값)</text>
+<text x="1230" y="496" font-size="13" font-weight="400" fill="#9a2f2c" text-anchor="start">인스턴스 사양: 확인하지 못함</text>
+</g>
+<g transform="translate(0,140)">
+<rect x="1210" y="560" width="360" height="270" rx="10" fill="#fdf1e3" stroke="#d08a3a" stroke-width="2"/>
+<text x="1230" y="592" font-size="18" font-weight="700" fill="#8a5410" text-anchor="start">RunPod Serverless (GPU)</text>
+<text x="1230" y="620" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#1f4e8c">입력: </tspan>/runsync 요청 1건: 취향, 후보 장소 풀,</text>
+<text x="1230" y="637" font-size="13" fill="#333" text-anchor="start">일자별 슬롯 구성, 시드</text>
+<text x="1230" y="664" font-size="13" fill="#333" text-anchor="start"><tspan font-weight="700" fill="#2f5a1e">출력: </tspan>일자별로 고른 장소 순서</text>
+<text x="1230" y="681" font-size="13" fill="#333" text-anchor="start">(55초 초과·상태 오류는 실패)</text>
+<text x="1230" y="716" font-size="13" font-weight="400" fill="#333" text-anchor="start">Max Workers 1</text>
+<text x="1230" y="736" font-size="13" font-weight="400" fill="#333" text-anchor="start">호출 1건 약 1.33초씩 직렬 처리 (측정 19)</text>
+<text x="1230" y="756" font-size="13" font-weight="400" fill="#333" text-anchor="start">콜드 스타트 6.25~21.48초 (Metrics)</text>
+<text x="1230" y="786" font-size="13" font-weight="400" fill="#9a2f2c" text-anchor="start">줄 덕분에 한 번에 한 요청의 호출 2개만 도착(유지)</text>
+<text x="1230" y="806" font-size="13" font-weight="400" fill="#9a2f2c" text-anchor="start">서킷 브레이커 없음: 실패해도 매번 호출</text>
+</g>
+<line x1="1090" y1="714" x2="1210" y2="520" stroke="#8a63b0" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="1118" y="734" font-size="12" font-weight="400" fill="#5a3a80" text-anchor="start">plan0·1·2</text>
+<text x="1118" y="750" font-size="12" font-weight="400" fill="#5a3a80" text-anchor="start">DB 조회</text>
+<line x1="1090" y1="974" x2="1210" y2="840" stroke="#d08a3a" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="1118" y="932" font-size="12" font-weight="400" fill="#8a5410" text-anchor="start">plan1·2</text>
+<text x="1118" y="948" font-size="12" font-weight="400" fill="#8a5410" text-anchor="start">RunPod 호출</text>
+<g transform="translate(0,268)">
+<rect x="40" y="1042" width="1520" height="196" rx="10" fill="#fff8e6" stroke="#d9a400" stroke-width="1.5"/>
+<text x="62" y="1072" font-size="16" font-weight="700" fill="#6b5200" text-anchor="start">동시 요청이 몰릴 때 이 구조의 동작</text>
+<text x="62" y="1100" font-size="14" font-weight="400" fill="#333" text-anchor="start">· 입장 판단: (줄에 있는 요청 수 + 1) × 3.65초가 55초 이하이면 줄에 서고, 넘으면 즉시 HTTP 503. 3.65초는 지금까지 측정한 서비스 시간 최대값(측정 14)</text>
+<text x="62" y="1124" font-size="14" font-weight="400" fill="#333" text-anchor="start">· 15번째 요청의 예상 완료 15 × 3.65 = 54.75초 ≤ 55초, 16번째는 58.4초 &gt; 55초라 즉시 503. 입력이 서비스 시간뿐이라 상한 15와 같은 결과이며 콜드 스타트는 반영하지 못함 (계산)</text>
+<text x="62" y="1148" font-size="14" font-weight="400" fill="#333" text-anchor="start">· 측정 23(동시 18건): 반복마다 15건 200, 3건 503(0.01초). 15번째 요청은 41.17초와 46.34초에 끝나 55초 안. 인접 완료 간격 최대 2.92초(설계 최대값 3.65초 이하)</text>
+<text x="62" y="1172" font-size="14" font-weight="400" fill="#333" text-anchor="start">· 콜드 스타트와 겹치면(최대 21.48초) 55초 안에 끝나는 요청은 9번째까지이고 11~15번째는 55초를 기다린 뒤 503 (계산, 미측정). 개선 구조 3은 같은 경우에 9건 처리, 나머지는 즉시 503</text>
+<text x="62" y="1200" font-size="13" font-weight="400" fill="#9a2f2c" text-anchor="start">확인하지 못함: 콜드 스타트와 겹칠 때의 실제 동작, 서버 로그의 WARNING 횟수, BE가 503을 전달하는 방식, ECS Task가 여러 개일 때 Task별로 줄이 생기는 영향</text>
+<text x="62" y="1222" font-size="13" font-weight="400" fill="#777" text-anchor="start">작성: 2026-11-08 · 코드 기준 fifo_gate.py, router.py, config.py, trip_orchestrator.py, db.py, model/inference.py · 측정 1, 14, 22, 23</text>
+</g>
+</svg>

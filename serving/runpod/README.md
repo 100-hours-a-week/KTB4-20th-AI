@@ -28,12 +28,11 @@ docker push <레지스트리>/place-model-runpod:v1
 ## AI 서버 환경변수
 
 ```
-MODEL_DIR=/models/place_model_v1        # CPU 경로용 묶음(컨테이너에 마운트)
 RUNPOD_MODEL_URL=https://api.runpod.ai/v2/<엔드포인트 ID>
 RUNPOD_MODEL_API_KEY=<RunPod API 키>
 ```
 
-`RUNPOD_MODEL_URL`을 비우면 CPU 경로만, `MODEL_DIR`을 비우면 GPU 경로만 쓴다. 모델 경로가 실패하면 기존 규칙 경로로 응답한다.
+`RUNPOD_MODEL_URL`을 비우면 모델 추론 경로를 만들 수 없다. 모델 경로가 실패하면 CPU로 넘기지 않고 기존 규칙 경로로 응답한다.
 
 ## 운영 설정과 벤치마크 결과 (2026-10-18, ADR-0004)
 
@@ -55,7 +54,7 @@ RUNPOD_MODEL_API_KEY=<RunPod API 키>
 
 - 응답: `{"days": [[슬롯마다 고른 google_place_id 또는 null] × 일수], "providers": [...], "model": "..."}`. 입력이 틀리면 `{"error": "..."}`다.
 - 일수는 1~9, 하루 슬롯은 1~8개다. 일자마다 문맥을 처음부터 시작하고, 이미 쓴 장소는 여행 전체에서 후보에서 뺀다. 첫 장소 무작위의 시드는 일자마다 `seed + 일자 번호(0부터)`다.
-- 이 요청은 이 형식을 아는 이미지부터 처리한다. 이전 이미지(v2)는 `days`를 모르고 오류 응답을 돌려주므로, AI 서버가 이를 실패로 보고 CPU나 규칙으로 되돌린다.
+- 이 요청은 이 형식을 아는 이미지부터 처리한다. 이전 이미지(v2)는 `days`를 모르고 오류 응답을 돌려주므로, AI 서버가 이를 실패로 보고 규칙으로 되돌린다.
 
 ## 동작 확인과 벤치마크
 
