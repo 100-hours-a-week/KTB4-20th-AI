@@ -31,6 +31,23 @@ _place_selection_gate = FifoGate(
     settings.place_selection_queue_capacity, settings.place_selection_queue_max_wait_seconds,
 )
 
+def run_place_selection(request: Place_Selection_Request) -> Place_Selection_Response_Data:
+    """
+    HTTP API와 RabbitMQ Worker가 함께 쓰는 place-selection 처리. 두 경로 모두 같은 FIFO 줄을 거쳐 RunPod를 한 번에 하나씩 부른다.
+
+    줄이 가득 차면 QueueFull, 줄에서 너무 오래 기다리면 QueueWaitTimeout을 던진다.
+    """
+    with _place_selection_gate.turn():
+        # 회피조건 취합 (그룹 전체)
+        deal_breakers: list[E_Breaker] = []
+        for member in request.members:
+            deal_breakers.extend(member.deal_breakers)
+
+        num_days = (request.end_date - request.start_date).days + 1
+        signal_days = outdoor_excluded_days(request.external_factors, request.region, request.start_date, num_days)
+        return build_place_selection(request, deal_breakers, num_days, signal_days)
+
+
 @router.post("/place-selection", response_model=Response[Place_Selection_Response_Data])
 def place_selection(request: Place_Selection_Request) -> Response[Place_Selection_Response_Data]:
     """
@@ -43,15 +60,7 @@ def place_selection(request: Place_Selection_Request) -> Response[Place_Selectio
     """
 
     try:
-        with _place_selection_gate.turn():
-            # 회피조건 취합 (그룹 전체)
-            deal_breakers: list[E_Breaker] = []
-            for member in request.members:
-                deal_breakers.extend(member.deal_breakers)
-
-            num_days = (request.end_date - request.start_date).days + 1
-            signal_days = outdoor_excluded_days(request.external_factors, request.region, request.start_date, num_days)
-            data = build_place_selection(request, deal_breakers, num_days, signal_days)
+        data = run_place_selection(request)
     except QueueFull:
         logger.warning("place-selection 줄이 가득 참(최대 %d건), 503으로 거절", settings.place_selection_queue_capacity)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="줄이 가득 차서 처리할 수 없음") from None

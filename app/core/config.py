@@ -82,6 +82,19 @@ class Settings(BaseSettings):
     place_selection_queue_capacity: int = Field(default=15, ge=1)
     place_selection_queue_max_wait_seconds: float = Field(default=55.0, gt=0)
 
+    # RabbitMQ AI Worker (planit-docs ai/RABBITMQ_AI_WORKER_IMPLEMENTATION.md). 주소가 비어 있으면 Worker를 띄우지 않고 HTTP API만 쓴다
+    # 예: amqp://planit-ai:{password}@rabbitmq.planit.local:5672/planit (vhost planit)
+    rabbitmq_url: str = Field(default="", repr=False)
+    mq_confirm_timeout_seconds: float = Field(default=5.0, gt=0)  # 발행 confirm 대기시간. 백엔드 confirm-timeout과 같은 값
+    mq_republish_max_retries: int = Field(default=3, ge=0)  # 결과 발행 실패 시 프로세스 안에서 다시 발행하는 횟수
+    mq_republish_backoff_base_seconds: float = Field(default=5.0, gt=0)  # 재발행 간격 시작값(5s, 10s, 20s)
+    mq_shutdown_grace_seconds: float = Field(default=120.0, gt=0)  # 종료 때 처리 중인 메시지를 기다리는 최대 시간(ECS stopTimeout)
+    # 큐별 Worker 수. Worker 1개 = 채널 1개 = Consumer 1개이고 prefetch는 항상 1이다. 처리 시간이 길어 먼저 받은 메시지가
+    # 뒤 메시지를 막지 않도록 1로 시작하고, 부하 측정 뒤 올린다. 일정 생성은 RunPod 워커가 1개라 늘려도 빨라지지 않는다(ADR-0016)
+    mq_workers_schedule_generate: int = Field(default=1, ge=0)
+    mq_workers_photo_mission_generate: int = Field(default=1, ge=0)
+    mq_workers_photo_judge: int = Field(default=1, ge=0)
+
     @property
     def allowed_image_hosts_list(self) -> list[str]:
         return [h.strip().lower() for h in self.allowed_image_hosts.split(",") if h.strip()]
