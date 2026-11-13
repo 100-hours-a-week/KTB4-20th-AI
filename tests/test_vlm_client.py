@@ -18,7 +18,11 @@ from app.core.config import Settings, settings
 from app.main import app, lifespan
 from app.photomissions import pipeline_generate, vlm_client
 from app.photomissions.pipeline_verify import normalize_image
-from app.photomissions.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer
+from app.photomissions.question_format import (
+    QUESTION_SYSTEM_PROMPT,
+    QUESTION_SYSTEM_PROMPT_V3,
+    QuestionAnswer,
+)
 from app.photomissions.schemas import VlmResult
 from scripts.baseline_verify import judge_local
 
@@ -222,8 +226,16 @@ def test_question_summary_names_the_rule_not_thresholds():
         vlm_format="question", vlm_api_key="secret-key",
         self_success_threshold=None, self_retry_threshold=None, self_landmark_threshold=None,
     ))
-    assert summary.startswith("verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 객관식, 등급 규칙 rule_grade")
+    assert summary.startswith("verify 판정 백엔드: self (모델 qwen, 마감 60초, 형식 객관식(question), 등급 규칙 rule_grade")
     assert "None" not in summary and "secret-key" not in summary and "vlm.example.com" not in summary
+
+
+def test_question_v3_is_a_question_format():
+    # 학습 모델용 v3도 객관식이다. 점수 기준 없이 시작하고, 시작 로그에 어느 지시문인지 남는다
+    no_thresholds = {"self_success_threshold": None, "self_retry_threshold": None, "self_landmark_threshold": None}
+    assert vlm_client.settings_errors(_settings(vlm_format="question_v3", **no_thresholds)) == []
+    summary = vlm_client.backend_summary(_settings(vlm_format="question_v3", **no_thresholds))
+    assert "형식 객관식(question_v3), 등급 규칙 rule_grade" in summary
 
 
 async def test_self_backend_starts_and_closes_client(monkeypatch):
@@ -666,8 +678,10 @@ async def test_request_matches_measurement_script(fake_vlm, monkeypatch):
     assert server.requests[0].headers["Authorization"] == "Bearer test-key"
 
 
-async def test_question_request_matches_measurement_script(fake_vlm, monkeypatch):
-    # 객관식도 측정 스크립트(--format question)와 같은 요청이어야 dev 측정 결과가 서비스에 맞는다
+@pytest.mark.parametrize(("fmt", "prompt"), [("question", QUESTION_SYSTEM_PROMPT), ("question_v3", QUESTION_SYSTEM_PROMPT_V3)])
+async def test_question_request_matches_measurement_script(fake_vlm, monkeypatch, fmt, prompt):
+    # 객관식도 측정 스크립트(--format question·question_v3)와 같은 요청이어야 dev·final 측정 결과가 서비스에 맞는다
+    # question_v3는 LoRA 학습 지시문이다. 서빙 때 지시문이 달라지면 학습 때와 다른 입력을 받는다
     buf = io.BytesIO()
     Image.new("RGB", (1600, 1200), "white").save(buf, format="JPEG")
     raw = buf.getvalue()
@@ -684,14 +698,15 @@ async def test_question_request_matches_measurement_script(fake_vlm, monkeypatch
         lambda **kwargs: real_client(transport=httpx.MockTransport(capture), **kwargs),
     )
     case = {"photo": "p.jpg", "kind": "positive", "target": PLACE, "mission": MISSION}
-    await judge_local(case, raw, "http://measure/v1", "qwen", fmt="question")
+    await judge_local(case, raw, "http://measure/v1", "qwen", fmt=fmt)
     monkeypatch.undo()
 
-    server = fake_vlm(lambda r: _chat(answer_json), vlm_format="question")
+    server = fake_vlm(lambda r: _chat(answer_json), vlm_format=fmt)
     await vlm_client.score(normalize_image(raw), PLACE, MISSION)
     sent = json.loads(server.requests[0].content)
     assert sent.pop("max_tokens") == 512
     assert sent == measured[0]
+    assert sent["messages"][0] == {"role": "system", "content": prompt}
 
 
 # 7. 관측 — Sentry에 시도 횟수·걸린 시간·상대 서버 상태를 남기고 키·주소는 남기지 않는다
