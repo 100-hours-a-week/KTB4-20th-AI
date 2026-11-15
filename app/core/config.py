@@ -39,7 +39,8 @@ class Settings(BaseSettings):
     vlm_model: str = ""  # 자체 모델 서버의 모델 이름
     vlm_deadline_seconds: float | None = None  # 판정 한 번에 자체 모델을 기다리는 전체 시간(재시도 포함)
     # 자체 모델 답 형식. score = 점수(0~100) + 아래 기준, question = 객관식 4문항 + 등급 규칙(question_format.rule_grade)
-    vlm_format: Literal["score", "question"] = "score"
+    # question_v3 = 객관식, 대상 질문의 none 경계만 바꾼 지시문. LoRA 학습 모델은 이 지시문으로 학습해서 함께 쓴다
+    vlm_format: Literal["score", "question", "question_v3"] = "score"
     # 자체 모델이 실패하거나 운영 시간 밖일 때 Gemini로 판정한다. 이 값(자체 모델 + Gemini를 합친 모델 판정 단계의
     # 전체 상한, 초)을 설정해야 폴백이 켜진다. 비우면 자체 모델 결과·에러를 그대로 돌려준다
     verify_model_budget_seconds: float | None = None
