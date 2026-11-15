@@ -7,6 +7,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.core.config import settings
 from app.core.sentry import init_sentry
+from app.mq.worker import MqWorkerPool
 from app.photomissions import pipeline_generate, pipeline_verify, vlm_client
 from app.photomissions.router import router as photomissions_router
 from app.trips.router import router as trips_router
@@ -16,6 +17,7 @@ init_sentry()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    workers: MqWorkerPool | None = None
     try:
         pipeline_generate.start()  # 설정이 틀리면 여기서 멈춘다
         pipeline_verify.check_settings(settings)  # verify 공통 설정(Gemini 단독 판정 마감). 판정 모델과 상관없이 본다
@@ -28,13 +30,25 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info(vlm_client.backend_summary(settings))
         if warning := vlm_client.deadline_warning(settings):
             logger.warning(warning)
+        # RabbitMQ 주소가 있을 때만 Worker를 띄운다. 큐가 없으면(백엔드가 아직 선언하지 않음) 시작을 멈춘다.
+        # 기존 HTTP API는 백엔드가 작업별 플래그로 동기 경로로 돌아갈 수 있도록 그대로 둔다
+        if settings.rabbitmq_url:
+            workers = MqWorkerPool(settings)
+            await workers.start()
+        else:
+            logger.info("RABBITMQ_URL이 없어 RabbitMQ Worker 없이 HTTP API만 씀")
         yield
     finally:
         # 시작 중 실패하거나 종료 정리가 실패해도 generate 상태는 비운다
         try:
-            await vlm_client.close()  # 시작하지 않았으면 아무것도 하지 않는다
+            # 새 메시지를 받지 않게 한 뒤 처리 중인 작업을 끝내고 닫는다. 모델 클라이언트를 닫기 전에 해야 한다
+            if workers is not None:
+                await workers.stop()
         finally:
-            pipeline_generate.close()
+            try:
+                await vlm_client.close()  # 시작하지 않았으면 아무것도 하지 않는다
+            finally:
+                pipeline_generate.close()
 
 
 app = FastAPI(title="KTB4-20th-AI", lifespan=lifespan)

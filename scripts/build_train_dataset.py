@@ -11,6 +11,11 @@
       --labels $R/train_run550_labels_359_v2.json --labels $P/train_pilot_labels.json --labels $P/train_pilot2_labels.json \\
       --out-dir /Volumes/T7/aihub/train/dataset_550 --dry-run
 
+  2차 학습 세트: 위 명령에 경주 1·2회차를 더한다. 2회차 사진은 DATASETS에 없는 동부권 zip 1에 있어 --extra-photos로 넘긴다
+      --missions $R/missions_gj.jsonl --missions $R/missions_gj2.jsonl \\
+      --labels $R/train_run550_labels_gj.json --labels $R/train_run550_labels_gj2.json \\
+      --extra-photos "/Volumes/T7/aihub/278_동부권_추가/278.국내 여행로그 데이터(동부권)/01-1.정식개방데이터/Training/01.원천데이터/TS_photo_1.zip"
+
   --dry-run은 개수만 세고 사진을 쓰지 않는다. 표시 파일에는 학습에 안 쓰는 미션도 있어도 된다
   (파일럿 표시 파일의 나머지는 --missions에 없으면 "미션 파일에 없음"이 아니라 "이번 세트 아님"으로 센다).
   --override는 같은 mission_id의 표시를 통째로 바꾼다 (파일럿 Q2 경계 다시 보기 결과처럼 나중에 고친 표시).
@@ -109,6 +114,8 @@ def main() -> None:
     ap.add_argument("--missions", type=pathlib.Path, action="append", required=True, help="미션 jsonl (여러 번 가능)")
     ap.add_argument("--labels", type=pathlib.Path, action="append", required=True, help="표시 결과 (여러 번 가능)")
     ap.add_argument("--override", type=pathlib.Path, help="나중에 고친 표시. 같은 mission_id의 표시를 통째로 바꾼다")
+    ap.add_argument("--extra-photos", type=pathlib.Path, action="append", default=[],
+                    help="DATASETS에 없는 사진 zip (여러 번 가능). 평가 스크립트가 DATASETS를 쓰므로 거기에 더하지 않는다")
     ap.add_argument("--out-dir", type=pathlib.Path, required=True, help="결과 폴더 (레포 밖에 둘 것)")
     ap.add_argument("--dry-run", action="store_true", help="개수만 세고 사진·파일을 쓰지 않는다")
     args = ap.parse_args()
@@ -127,7 +134,7 @@ def main() -> None:
     if unlabeled:
         ap.error(f"미션은 있는데 표시가 없음 {len(unlabeled)}개 (예: {unlabeled[:3]}). --labels를 확인할 것")
 
-    index = index_photos([args.aihub / rel for paths in DATASETS.values() for rel in paths["photos"]])
+    index = index_photos([args.aihub / rel for paths in DATASETS.values() for rel in paths["photos"]] + args.extra_photos)
     no_photo = sorted({label["photo"] for label, _ in kept} - set(index))
     if no_photo:
         ap.error(f"원본 사진을 찾지 못함 {len(no_photo)}장 (예: {no_photo[:3]})")

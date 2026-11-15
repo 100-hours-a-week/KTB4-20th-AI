@@ -39,7 +39,8 @@ class Settings(BaseSettings):
     vlm_model: str = ""  # 자체 모델 서버의 모델 이름
     vlm_deadline_seconds: float | None = None  # 판정 한 번에 자체 모델을 기다리는 전체 시간(재시도 포함)
     # 자체 모델 답 형식. score = 점수(0~100) + 아래 기준, question = 객관식 4문항 + 등급 규칙(question_format.rule_grade)
-    vlm_format: Literal["score", "question"] = "score"
+    # question_v3 = 객관식, 대상 질문의 none 경계만 바꾼 지시문. LoRA 학습 모델은 이 지시문으로 학습해서 함께 쓴다
+    vlm_format: Literal["score", "question", "question_v3"] = "score"
     # 자체 모델이 실패하거나 운영 시간 밖일 때 Gemini로 판정한다. 이 값(자체 모델 + Gemini를 합친 모델 판정 단계의
     # 전체 상한, 초)을 설정해야 폴백이 켜진다. 비우면 자체 모델 결과·에러를 그대로 돌려준다
     verify_model_budget_seconds: float | None = None
@@ -81,6 +82,19 @@ class Settings(BaseSettings):
     #   55 = BE 읽기 타임아웃 60초 − 요청 처리 약 2.7초 − 여유 2초 = 55.3 → 55
     place_selection_queue_capacity: int = Field(default=15, ge=1)
     place_selection_queue_max_wait_seconds: float = Field(default=55.0, gt=0)
+
+    # RabbitMQ AI Worker (planit-docs ai/RABBITMQ_AI_WORKER_IMPLEMENTATION.md). 주소가 비어 있으면 Worker를 띄우지 않고 HTTP API만 쓴다
+    # 예: amqp://planit-ai:{password}@rabbitmq.planit.local:5672/planit (vhost planit)
+    rabbitmq_url: str = Field(default="", repr=False)
+    mq_confirm_timeout_seconds: float = Field(default=5.0, gt=0)  # 발행 confirm 대기시간. 백엔드 confirm-timeout과 같은 값
+    mq_republish_max_retries: int = Field(default=3, ge=0)  # 결과 발행 실패 시 프로세스 안에서 다시 발행하는 횟수
+    mq_republish_backoff_base_seconds: float = Field(default=5.0, gt=0)  # 재발행 간격 시작값(5s, 10s, 20s)
+    mq_shutdown_grace_seconds: float = Field(default=120.0, gt=0)  # 종료 때 처리 중인 메시지를 기다리는 최대 시간(ECS stopTimeout)
+    # 큐별 Worker 수. Worker 1개 = 채널 1개 = Consumer 1개이고 prefetch는 항상 1이다. 처리 시간이 길어 먼저 받은 메시지가
+    # 뒤 메시지를 막지 않도록 1로 시작하고, 부하 측정 뒤 올린다. 일정 생성은 RunPod 워커가 1개라 늘려도 빨라지지 않는다(ADR-0016)
+    mq_workers_schedule_generate: int = Field(default=1, ge=0)
+    mq_workers_photo_mission_generate: int = Field(default=1, ge=0)
+    mq_workers_photo_judge: int = Field(default=1, ge=0)
 
     @property
     def allowed_image_hosts_list(self) -> list[str]:

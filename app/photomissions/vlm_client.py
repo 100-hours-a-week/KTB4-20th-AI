@@ -14,15 +14,20 @@ from fastapi import HTTPException, status
 
 from app.core.config import Settings
 from app.photomissions.prompts import VERIFY_SYSTEM_PROMPT
-from app.photomissions.question_format import QUESTION_SYSTEM_PROMPT, QuestionAnswer
+from app.photomissions.question_format import (
+    QUESTION_SYSTEM_PROMPT,
+    QUESTION_SYSTEM_PROMPT_V3,
+    QuestionAnswer,
+)
 from app.photomissions.schemas import VlmResult
 
 MAX_ATTEMPTS = 2  # 최초 1회 + 재시도 1회 (Gemini와 같은 정책)
 MAX_TOKENS = 512  # 점수 형식 답은 10/13 측정 287건에서 중앙값 111, 최대 141토큰이었다. 객관식 답은 네 칸뿐이라 더 짧을 것으로 본다(Qwen3 서비스 설정에서 미확인)
-# 답 형식별 (지시문, 응답 스키마). 측정 스크립트(baseline_verify.FORMATS의 score·question)와 같은 짝이다
+# 답 형식별 (지시문, 응답 스키마). 측정 스크립트(baseline_verify.FORMATS의 score·question·question_v3)와 같은 짝이다
 FORMATS: dict[str, tuple[str, type[VlmResult] | type[QuestionAnswer]]] = {
     "score": (VERIFY_SYSTEM_PROMPT, VlmResult),
     "question": (QUESTION_SYSTEM_PROMPT, QuestionAnswer),
+    "question_v3": (QUESTION_SYSTEM_PROMPT_V3, QuestionAnswer),
 }
 # 연결·전송·연결 대기는 정상이면 금방 끝나서 짧게 둔다. 답을 기다리는 시간(읽기)은 전체 마감까지 쓴다
 CONNECT_TIMEOUT = 5.0
@@ -77,6 +82,11 @@ def fallback_enabled(s: Settings) -> bool:
     return s.verify_backend == "self" and s.verify_model_budget_seconds is not None
 
 
+def _is_question(s: Settings) -> bool:
+    # 객관식 형식(question·question_v3)은 지시문만 다르고 답 스키마·등급 규칙이 같다
+    return FORMATS[s.vlm_format][1] is QuestionAnswer
+
+
 def settings_errors(s: Settings) -> list[str]:
     # self 판정에 필요한 설정이 빠지거나 틀린 것을 모두 모은다. 하나라도 있으면 앱이 시작되지 않는다
     # 서버는 켜졌는데 판정마다 502가 나는 것보다, 배포할 때 바로 멈추는 편이 원인을 찾기 쉽다
@@ -91,7 +101,7 @@ def settings_errors(s: Settings) -> list[str]:
         errors.append("VLM_DEADLINE_SECONDS는 0보다 큰 유한한 수여야 함")
     errors += _fallback_errors(s)
 
-    if s.vlm_format == "question":  # 객관식은 점수 기준 대신 등급 규칙을 쓴다
+    if _is_question(s):  # 객관식은 점수 기준 대신 등급 규칙을 쓴다
         return errors
     success, retry, landmark = s.self_success_threshold, s.self_retry_threshold, s.self_landmark_threshold
     if success is None or retry is None or landmark is None:
@@ -157,10 +167,10 @@ def backend_summary(s: Settings) -> str:
     # 서버를 켤 때 어느 모델로 판정하는지 한 줄로 보여 준다. 키와 서버 주소(Pod ID가 들어 있음)는 넣지 않는다
     if s.verify_backend != "self":
         return "verify 판정 백엔드: gemini"
-    if s.vlm_format == "question":
+    if _is_question(s):
         return _with_fallback(s, (
             f"verify 판정 백엔드: self (모델 {s.vlm_model}, 마감 {s.vlm_deadline_seconds:g}초, "
-            "형식 객관식, 등급 규칙 rule_grade: 판단 불가·다른 장소·대상 없음 실패 / 대상 부족·조건 안 지킴·장소 모름 재시도)"
+            f"형식 객관식({s.vlm_format}), 등급 규칙 rule_grade: 판단 불가·다른 장소·대상 없음 실패 / 대상 부족·조건 안 지킴·장소 모름 재시도)"
         ))
     return _with_fallback(s, (
         f"verify 판정 백엔드: self (모델 {s.vlm_model}, 마감 {s.vlm_deadline_seconds:g}초, 형식 점수, "
